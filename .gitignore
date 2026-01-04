@@ -1,0 +1,57 @@
+# Build outputs
+build/
+*.o
+*.d
+*.lst
+*.elf
+*.hex
+*.bin
+*.map
+
+# Library build artifacts
+libDaisy/build/
+DaisySP/build/
+
+# IDE / Editor
+.vscode/
+*.code-workspace
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Debug files
+*.dSYM/
+
+# Backup files
+*.bak
+*.orig
+
+# OpenOCD / Debug
+*.cfg.local
+
+# Documentation builds (keep source)
+doc/html/
+doc/latex/
+
+# Flash/programming temporary files
+*.jlink
