@@ -1,10 +1,10 @@
 # Mutable Instruments Ports for Daisy
 
-Ports of [Mutable Instruments](https://mutable-instruments.net/) Eurorack module firmwares to the [Electrosmith Daisy](https://www.electro-smith.com/daisy) platform.
+Ports of [Mutable Instruments](https://pichenettes.github.io/mutable-instruments-documentation/) Eurorack module firmwares to the [Electrosmith Daisy](https://daisy.audio/) platform.
 
 ## Overview
 
-This repository contains ports of open-source Mutable Instruments DSP code to run on Daisy hardware, specifically targeting the **Daisy Patch.Init()** module.
+This repository contains ports of open-source Mutable Instruments DSP code to run on Daisy hardware, specifically targeting the **Daisy Patch.Init()** and **Daisy Patch** modules.
 
 ## Repository Structure
 
@@ -32,7 +32,7 @@ mutables_daisies/
 | Clouds | 🔴 Not started | - |
 | Rings | 🔴 Not started | - |
 | Braids | 🔴 Not started | - |
-| Elements | 🔴 Not started | - |
+| Beads | 🔴 Not started | - |
 
 ### Legend
 - 🟢 Complete
