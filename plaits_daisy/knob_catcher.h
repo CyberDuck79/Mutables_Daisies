@@ -47,15 +47,19 @@ public:
         filtered_value_ = 0.0f;
         stored_value_ = 0.0f;
         previous_value_ = 0.0f;
+        settling_samples_ = 0;
     }
     
     /**
      * Call when switching to a new parameter page
      * Stores the current parameter value and enters waiting state
      * @param current_param_value The current value of the parameter (0-1)
+     * @param current_adc_value The current knob ADC reading (0-1) - used to init filter
      */
-    void OnPageChange(float current_param_value) {
+    void OnPageChange(float current_param_value, float current_adc_value) {
         stored_value_ = current_param_value;
+        filtered_value_ = current_adc_value;   // Initialize filter with current knob position
+        settling_samples_ = kSettlingSamples;  // Wait for filter to settle before detecting movement
         state_ = KNOB_WAITING;
     }
     
@@ -85,6 +89,13 @@ public:
                 break;
                 
             case KNOB_WAITING:
+                // Wait for filter to settle before detecting movement
+                if (settling_samples_ > 0) {
+                    settling_samples_--;
+                    previous_value_ = filtered_value_;  // Keep updating baseline while settling
+                    output_value = stored_value_;
+                    break;
+                }
                 // Wait for knob to move before doing anything
                 if (fabsf(filtered_value_ - previous_value_) > kMovementThreshold) {
                     // User moved the knob
@@ -173,9 +184,10 @@ public:
 
 private:
     // Thresholds (same as original Plaits)
-    static constexpr float kMovementThreshold = 0.03f;  // Movement needed to exit waiting
+    static constexpr float kMovementThreshold = 0.03f;  // Movement needed to exit waiting (3%)
     static constexpr float kMinDelta = 0.005f;          // Minimum delta to process
     static constexpr float kCatchUpThreshold = 0.005f;  // When to consider "caught up"
+    static constexpr int kSettlingSamples = 100;        // ~2ms at 48kHz, let filter settle
     
     KnobState state_;
     float lp_coefficient_;
@@ -183,6 +195,7 @@ private:
     float filtered_value_;
     float stored_value_;
     float previous_value_;
+    int settling_samples_;  // Countdown before movement detection starts
 };
 
 /**
@@ -206,10 +219,11 @@ public:
     /**
      * Call when page changes - puts all knobs into waiting state
      * @param current_values Array of current parameter values for the new page
+     * @param current_adc_values Array of current knob ADC readings
      */
-    void OnPageChange(const float* current_values) {
+    void OnPageChange(const float* current_values, const float* current_adc_values) {
         for (int i = 0; i < N; i++) {
-            catchers_[i].OnPageChange(current_values[i]);
+            catchers_[i].OnPageChange(current_values[i], current_adc_values[i]);
         }
     }
     

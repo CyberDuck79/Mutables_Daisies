@@ -140,7 +140,8 @@ Switch toggle_b8;
 
 // Persistent storage for settings
 PersistentStorage<Settings> storage(hw.qspi);
-Settings settings;
+Settings* settings_ptr = nullptr;  // Will point to storage's settings after Init
+#define settings (*settings_ptr)   // Macro for backwards compatibility
 bool settings_dirty = false;  // Track if settings need saving
 
 // LED controller for engine/bank display
@@ -179,6 +180,9 @@ plaits_daisy::KnobCatcherBank<4> param_mode_catchers;
 
 // Track previous page for detecting page changes
 ParameterPage previous_page = PAGE_ATTENUVERTERS;
+
+// Flag to prevent race condition: only write settings when catchers are synced with current page
+volatile bool param_catchers_ready = true;
 
 // Saved Play mode parameter values (stored when entering Parameters mode)
 float saved_play_mode_values[4] = {0.5f, 0.5f, 0.5f, 0.5f};
@@ -427,41 +431,47 @@ void AudioCallback(AudioHandle::InputBuffer  in,
             knob_val[i] = param_mode_catchers.Process(i, knob_lp[i]);
         }
         
-        switch (current_page) {
-            case PAGE_ATTENUVERTERS:
-                // Page 0: Attenuverters
-                // CV_1: FM Amount (-1 to +1)
-                settings.fm_amount = knob_val[0] * 2.0f - 1.0f;
-                // CV_2: Timbre Mod attenuverter (-1 to +1)
-                settings.timbre_mod_amount = knob_val[1] * 2.0f - 1.0f;
-                // CV_3: Morph Mod attenuverter (-1 to +1)
-                settings.morph_mod_amount = knob_val[2] * 2.0f - 1.0f;
-                // CV_4: Harmonics Mod attenuverter (-1 to +1)
-                settings.harmonics_mod_amount = knob_val[3] * 2.0f - 1.0f;
-                break;
-                
-            case PAGE_LPG_ENVELOPE:
-                // Page 1: LPG / Envelope / Output
-                // CV_1: Decay (0 to 1)
-                settings.decay = knob_val[0];
-                // CV_2: LPG Colour (0 to 1)
-                settings.lpg_colour = knob_val[1];
-                // CV_3: Output Level (0 to 1)
-                settings.output_level = knob_val[2];
-                // CV_4: Reserved
-                break;
-                
-            case PAGE_TUNING:
-                // Page 2: Tuning
-                // CV_1: Octave Range (0 to 8, quantized)
-                settings.octave_range = static_cast<int>(knob_val[0] * 8.99f);
-                // CV_2: Fine Tune (-1 to +1 semitone)
-                settings.fine_tune = knob_val[1] * 2.0f - 1.0f;
-                // CV_3, CV_4: Reserved
-                break;
-                
-            default:
-                break;
+        // Only update settings if catchers are synchronized with current page
+        // (prevents race condition during page transitions)
+        if (!param_catchers_ready) {
+            // Catchers not ready - don't write settings, just keep current values
+        } else {
+            switch (current_page) {
+                case PAGE_ATTENUVERTERS:
+                    // Page 0: Attenuverters
+                    // CV_1: FM Amount (-1 to +1)
+                    settings.fm_amount = knob_val[0] * 2.0f - 1.0f;
+                    // CV_2: Timbre Mod attenuverter (-1 to +1)
+                    settings.timbre_mod_amount = knob_val[1] * 2.0f - 1.0f;
+                    // CV_3: Morph Mod attenuverter (-1 to +1)
+                    settings.morph_mod_amount = knob_val[2] * 2.0f - 1.0f;
+                    // CV_4: Harmonics Mod attenuverter (-1 to +1)
+                    settings.harmonics_mod_amount = knob_val[3] * 2.0f - 1.0f;
+                    break;
+                    
+                case PAGE_LPG_ENVELOPE:
+                    // Page 1: LPG / Envelope / Output
+                    // CV_1: Decay (0 to 1)
+                    settings.decay = knob_val[0];
+                    // CV_2: LPG Colour (0 to 1)
+                    settings.lpg_colour = knob_val[1];
+                    // CV_3: Output Level (0 to 1)
+                    settings.output_level = knob_val[2];
+                    // CV_4: Reserved
+                    break;
+                    
+                case PAGE_TUNING:
+                    // Page 2: Tuning
+                    // CV_1: Octave Range (0 to 8, quantized)
+                    settings.octave_range = static_cast<int>(knob_val[0] * 8.99f);
+                    // CV_2: Fine Tune (-1 to +1 semitone)
+                    settings.fine_tune = knob_val[1] * 2.0f - 1.0f;
+                    // CV_3, CV_4: Reserved
+                    break;
+                    
+                default:
+                    break;
+            }
         }
         
         // Apply settings to patch in real-time
@@ -505,11 +515,47 @@ void AudioCallback(AudioHandle::InputBuffer  in,
 // Debug: state names for logging
 const char* StateToString(plaits_daisy::KnobState state) {
     switch (state) {
-        case plaits_daisy::KNOB_TRACKING: return "TRACK";
-        case plaits_daisy::KNOB_WAITING: return "WAIT ";
-        case plaits_daisy::KNOB_CATCHING_UP: return "CATCH";
-        default: return "?????";
+        case plaits_daisy::KNOB_TRACKING: return "TRK";
+        case plaits_daisy::KNOB_WAITING: return "WAI";
+        case plaits_daisy::KNOB_CATCHING_UP: return "CAT";
+        default: return "???";
     }
+}
+
+// Engine names (24 engines, 3 banks of 8)
+const char* kEngineNames[24] = {
+    // Bank 0: Classic synthesis
+    "VA",      // 0: Virtual Analog
+    "WSHE",    // 1: Waveshaping
+    "FM",      // 2: FM
+    "GRAIN",   // 3: Grain
+    "ADTV",    // 4: Additive
+    "WT",      // 5: Wavetable
+    "CHRD",    // 6: Chord
+    "VOWL",    // 7: Vowel/Speech
+    // Bank 1: Noise and percussion  
+    "SWM",     // 8: Swarm
+    "NOIS",    // 9: Noise
+    "PART",    // 10: Particle
+    "STR",     // 11: String (Karplus)
+    "MODL",    // 12: Modal
+    "BD",      // 13: Bass drum
+    "SD",      // 14: Snare drum
+    "HH",      // 15: Hi-hat
+    // Bank 2: Special
+    "VA2",     // 16: Virtual analog 2
+    "WS2",     // 17: Waveshaping 2
+    "FM2",     // 18: 2-op FM
+    "GRN2",    // 19: Granular formant
+    "ADD2",    // 20: Harmonic
+    "WT2",     // 21: Wavetable 2
+    "CHD2",    // 22: Chord 2
+    "VOW2"     // 23: Vowel 2
+};
+
+const char* GetEngineName(int engine) {
+    if (engine >= 0 && engine < 24) return kEngineNames[engine];
+    return "??";
 }
 
 int main(void)
@@ -536,13 +582,14 @@ int main(void)
     default_settings.Defaults();
     storage.Init(default_settings);
     
-    // Load settings from QSPI
-    settings = storage.GetSettings();
+    // Get pointer to settings inside storage (so changes are saved)
+    settings_ptr = &storage.GetSettings();
     
     // Validate signature - if invalid, use defaults
     if (settings.signature != kSettingsSignature) {
         settings.Defaults();
         settings.signature = kSettingsSignature;
+        storage.Save();  // Save defaults with correct signature
     }
     
     // Initialize Plaits voice with buffer allocator
@@ -589,10 +636,18 @@ int main(void)
         
         // Handle mode transitions for knob catching
         if (current_mode != previous_mode) {
+            // Get current knob ADC values for proper catcher initialization
+            float current_adc[4] = {
+                hw.GetAdcValue(CV_1),
+                hw.GetAdcValue(CV_2),
+                hw.GetAdcValue(CV_3),
+                hw.GetAdcValue(CV_4)
+            };
+            
             if (current_mode == MODE_PLAY) {
                 // Entering Play mode from Parameters mode
                 // Use the SAVED play mode values (from when we entered Parameters mode)
-                play_mode_catchers.OnPageChange(saved_play_mode_values);
+                play_mode_catchers.OnPageChange(saved_play_mode_values, current_adc);
                 
                 // Save settings to QSPI
                 storage.Save();
@@ -605,7 +660,8 @@ int main(void)
                 // Set up param mode catchers with current page values
                 float page_values[4];
                 GetPageParameterValues(current_page, page_values);
-                param_mode_catchers.OnPageChange(page_values);
+                param_mode_catchers.OnPageChange(page_values, current_adc);
+                param_catchers_ready = true;  // Catchers synced
             }
             previous_mode = current_mode;
         }
@@ -615,8 +671,15 @@ int main(void)
             // Page changed - set up catchers for new page
             float page_values[4];
             GetPageParameterValues(current_page, page_values);
-            param_mode_catchers.OnPageChange(page_values);
+            float current_adc[4] = {
+                hw.GetAdcValue(CV_1),
+                hw.GetAdcValue(CV_2),
+                hw.GetAdcValue(CV_3),
+                hw.GetAdcValue(CV_4)
+            };
+            param_mode_catchers.OnPageChange(page_values, current_adc);
             previous_page = current_page;
+            param_catchers_ready = true;  // Catchers now synced with current page
         }
         
         // Track for save detection (legacy)
@@ -651,7 +714,13 @@ int main(void)
                             // Put catchers in WAITING state with reset values (0.5 = center)
                             {
                                 float reset_values[4] = {0.5f, 0.5f, 0.5f, 0.5f};
-                                param_mode_catchers.OnPageChange(reset_values);
+                                float current_adc[4] = {
+                                    hw.GetAdcValue(CV_1),
+                                    hw.GetAdcValue(CV_2),
+                                    hw.GetAdcValue(CV_3),
+                                    hw.GetAdcValue(CV_4)
+                                };
+                                param_mode_catchers.OnPageChange(reset_values, current_adc);
                             }
                             break;
                         case PAGE_LPG_ENVELOPE:
@@ -677,6 +746,7 @@ int main(void)
                     patch.engine = led.GetGlobalEngine();
                 } else {
                     // Short press in Parameters mode: next page
+                    param_catchers_ready = false;  // Prevent race condition
                     current_page = static_cast<ParameterPage>(
                         (current_page + 1) % PAGE_COUNT
                     );
@@ -723,21 +793,52 @@ int main(void)
             float k4 = hw.GetAdcValue(CV_4);
             
             if (current_mode == MODE_PLAY) {
-                hw.PrintLine("PLAY | K1:%d%% K2:%d%% K3:%d%% K4:%d%% | %s %s %s %s | eng:%d",
+                // Play mode: show bank, engine, knobs, states, and engine params
+                int bank = patch.engine / 8;
+                int eng_in_bank = patch.engine % 8;
+                hw.PrintLine("PLAY B%d E%d(%s) | K:%d,%d,%d,%d | %s,%s,%s,%s",
+                    bank, eng_in_bank, GetEngineName(patch.engine),
                     (int)(k1 * 100), (int)(k2 * 100), (int)(k3 * 100), (int)(k4 * 100),
                     StateToString(play_mode_catchers.GetState(0)),
                     StateToString(play_mode_catchers.GetState(1)),
                     StateToString(play_mode_catchers.GetState(2)),
-                    StateToString(play_mode_catchers.GetState(3)),
-                    patch.engine);
+                    StateToString(play_mode_catchers.GetState(3)));
+                // Second line: actual engine parameter values (as integers to avoid float printf crash)
+                hw.PrintLine("  Note:%d Harm:%d Timb:%d Morph:%d",
+                    (int)patch.note, (int)(patch.harmonics * 100), 
+                    (int)(patch.timbre * 100), (int)(patch.morph * 100));
             } else {
-                hw.PrintLine("PARAM p%d | K1:%d%% K2:%d%% K3:%d%% K4:%d%% | %s %s %s %s",
-                    current_page,
+                // Parameters mode: show page, knobs, states, and current page values
+                const char* page_names[3] = {"ATTEN", "LPG", "TUNE"};
+                hw.PrintLine("PARAM P%d(%s) | K:%d,%d,%d,%d | %s,%s,%s,%s",
+                    current_page, page_names[current_page],
                     (int)(k1 * 100), (int)(k2 * 100), (int)(k3 * 100), (int)(k4 * 100),
                     StateToString(param_mode_catchers.GetState(0)),
                     StateToString(param_mode_catchers.GetState(1)),
                     StateToString(param_mode_catchers.GetState(2)),
                     StateToString(param_mode_catchers.GetState(3)));
+                // Second line: current page parameter values (as integers)
+                switch (current_page) {
+                    case PAGE_ATTENUVERTERS:
+                        // Values are -1 to +1, show as -100 to +100
+                        hw.PrintLine("  FM:%d TiMod:%d MoMod:%d HaMod:%d",
+                            (int)(settings.fm_amount * 100), (int)(settings.timbre_mod_amount * 100),
+                            (int)(settings.morph_mod_amount * 100), (int)(settings.harmonics_mod_amount * 100));
+                        break;
+                    case PAGE_LPG_ENVELOPE:
+                        // Values are 0 to 1, show as 0 to 100
+                        hw.PrintLine("  Decay:%d LPG:%d Level:%d EnvMode:%d",
+                            (int)(settings.decay * 100), (int)(settings.lpg_colour * 100),
+                            (int)(settings.output_level * 100), settings.envelope_mode);
+                        break;
+                    case PAGE_TUNING:
+                        // Octave is 0-8, fine tune is -1 to +1
+                        hw.PrintLine("  Octave:%d FineTune:%d",
+                            settings.octave_range, (int)(settings.fine_tune * 100));
+                        break;
+                    default:
+                        break;
+                }
             }
         }
         
