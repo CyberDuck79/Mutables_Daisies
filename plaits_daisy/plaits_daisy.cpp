@@ -72,6 +72,13 @@ struct Settings {
     int octave_range;          // 0-8 (default 4 = C4)
     float fine_tune;           // -1 to +1 (±1 semitone)
     
+    // V/Oct Calibration
+    // ADC reads 0.0-1.0 for -5V to +5V, so 0V = 0.5, 1V = 0.6
+    // voct_offset: ADC value that corresponds to C4 (MIDI note 60)
+    // voct_scale: semitones per ADC unit (ideal: 120 for 10V range)
+    float voct_offset;         // ADC value for 0V (ideal: 0.5)
+    float voct_scale;          // Semitones per ADC unit (ideal: 120)
+    
     // Default values
     void Defaults() {
         signature = 0x504C5401;  // "PLT\x01"
@@ -85,6 +92,9 @@ struct Settings {
         envelope_mode = ENV_PING;
         octave_range = 4;  // C4 (Middle C)
         fine_tune = 0.0f;
+        // Default calibration (ideal values)
+        voct_offset = 0.5f;      // 0V = 0.5 ADC
+        voct_scale = 120.0f;     // 12 semitones per volt, 10V range = 120 semitones
     }
     
     // Required by PersistentStorage for change detection
@@ -99,7 +109,9 @@ struct Settings {
                output_level != other.output_level ||
                envelope_mode != other.envelope_mode ||
                octave_range != other.octave_range ||
-               fine_tune != other.fine_tune;
+               fine_tune != other.fine_tune ||
+               voct_offset != other.voct_offset ||
+               voct_scale != other.voct_scale;
     }
 };
 
@@ -111,7 +123,8 @@ constexpr uint32_t kSettingsSignature = 0x504C5401;  // "PLT\x01"
 
 enum UIMode {
     MODE_PLAY = 0,
-    MODE_PARAMETERS = 1
+    MODE_PARAMETERS = 1,
+    MODE_CALIBRATION = 2  // V/Oct calibration mode
 };
 
 enum ParameterPage {
@@ -121,10 +134,22 @@ enum ParameterPage {
     PAGE_COUNT = 3
 };
 
+// Calibration steps
+enum CalibrationStep {
+    CAL_WAITING_LOW = 0,   // Waiting for user to send 1V and press button
+    CAL_WAITING_HIGH = 1,  // Waiting for user to send 3V and press button
+    CAL_DONE = 2           // Calibration complete, waiting for exit
+};
+
 // Current UI state
 UIMode current_mode = MODE_PLAY;
 ParameterPage current_page = PAGE_ATTENUVERTERS;
 bool was_in_parameters_mode = false;  // Track mode changes for save trigger
+
+// Calibration state
+CalibrationStep cal_step = CAL_WAITING_LOW;
+float cal_low_voltage = 0.0f;   // ADC reading at 1V
+float cal_high_voltage = 0.0f;  // ADC reading at 3V
 
 // =============================================================================
 // Hardware
@@ -362,10 +387,14 @@ void AudioCallback(AudioHandle::InputBuffer  in,
     
     // Convert CV inputs from 0.0-1.0 to bipolar -1.0 to +1.0
     // Patch.Init CV inputs: -5V to +5V mapped to 0.0-1.0, center = 0.5
-    float cv5_voct = (cv_lp[0] - 0.5f) * 2.0f;     // V/Oct: -1 to +1 (maps to -5V to +5V)
+    // Note: cv5_voct now uses calibration data
     float cv6_timbre = (cv_lp[1] - 0.5f) * 2.0f;   // Timbre mod
     float cv7_morph = (cv_lp[2] - 0.5f) * 2.0f;    // Morph mod  
     float cv8_harm_lvl = (cv_lp[3] - 0.5f) * 2.0f; // Harmonics or Level
+    
+    // Calculate V/Oct semitones using calibration
+    // voct_offset is ADC value for 0V, voct_scale is semitones per ADC unit
+    float voct_semitones = (cv_lp[0] - settings.voct_offset) * settings.voct_scale;
     
     // ==========================================================================
     // Mode-dependent knob handling with catch-up behavior
@@ -387,9 +416,6 @@ void AudioCallback(AudioHandle::InputBuffer  in,
             // Settings 0-7: Root note (C0-C7) with ±7 semitone knob range
             float root_note = 12.0f + (settings.octave_range * 12.0f);
             float knob_offset = transposition * 7.0f;  // ±7 semitones
-            
-            // V/Oct: 1V = 12 semitones (cv5_voct range is -1 to +1 = -5V to +5V)
-            float voct_semitones = cv5_voct * 5.0f * 12.0f;  // ±5V = ±60 semitones
             
             // Fine tune: ±1 semitone
             float fine_offset = settings.fine_tune;
@@ -631,11 +657,14 @@ int main(void)
         // Mode detection (B8 toggle)
         // =======================================================================
         // B8 UP = Play mode, B8 DOWN = Parameters mode
-        bool b8_is_down = toggle_b8.Pressed();
-        current_mode = b8_is_down ? MODE_PARAMETERS : MODE_PLAY;
+        // Note: Don't change mode if we're in calibration mode
+        if (current_mode != MODE_CALIBRATION) {
+            bool b8_is_down = toggle_b8.Pressed();
+            current_mode = b8_is_down ? MODE_PARAMETERS : MODE_PLAY;
+        }
         
         // Handle mode transitions for knob catching
-        if (current_mode != previous_mode) {
+        if (current_mode != previous_mode && current_mode != MODE_CALIBRATION) {
             // Get current knob ADC values for proper catcher initialization
             float current_adc[4] = {
                 hw.GetAdcValue(CV_1),
@@ -702,7 +731,7 @@ int main(void)
                     // Long press in Play mode: change bank
                     led.NextBank();
                     patch.engine = led.GetGlobalEngine();
-                } else {
+                } else if (current_mode == MODE_PARAMETERS) {
                     // Long press in Parameters mode: page-specific action
                     switch (current_page) {
                         case PAGE_ATTENUVERTERS:
@@ -728,11 +757,18 @@ int main(void)
                             CycleEnvelopeMode();
                             break;
                         case PAGE_TUNING:
-                            // Could enter calibration mode (future)
+                            // Enter V/Oct calibration mode
+                            current_mode = MODE_CALIBRATION;
+                            cal_step = CAL_WAITING_LOW;
+                            hw.PrintLine("CALIBRATION: Send 1V to CV5, press button");
                             break;
                         default:
                             break;
                     }
+                } else if (current_mode == MODE_CALIBRATION) {
+                    // Long press in Calibration mode: exit without saving
+                    current_mode = MODE_PARAMETERS;
+                    hw.PrintLine("Calibration cancelled");
                 }
             }
         }
@@ -744,12 +780,68 @@ int main(void)
                     // Short press in Play mode: next engine
                     led.NextEngine();
                     patch.engine = led.GetGlobalEngine();
-                } else {
+                } else if (current_mode == MODE_PARAMETERS) {
                     // Short press in Parameters mode: next page
                     param_catchers_ready = false;  // Prevent race condition
                     current_page = static_cast<ParameterPage>(
                         (current_page + 1) % PAGE_COUNT
                     );
+                } else if (current_mode == MODE_CALIBRATION) {
+                    // Short press in Calibration mode: capture voltage and advance
+                    float cv5_adc = hw.GetAdcValue(CV_5);
+                    
+                    switch (cal_step) {
+                        case CAL_WAITING_LOW:
+                            // Capture 1V reading
+                            cal_low_voltage = cv5_adc;
+                            cal_step = CAL_WAITING_HIGH;
+                            hw.PrintLine("Captured 1V: %d/1000", (int)(cal_low_voltage * 1000));
+                            hw.PrintLine("Now send 3V to CV5, press button");
+                            break;
+                            
+                        case CAL_WAITING_HIGH:
+                            // Capture 3V reading
+                            cal_high_voltage = cv5_adc;
+                            hw.PrintLine("Captured 3V: %d/1000", (int)(cal_high_voltage * 1000));
+                            
+                            // Calculate calibration
+                            // Between 1V and 3V there are 2 octaves = 24 semitones
+                            // ADC difference should be ~0.2 (2V / 10V range)
+                            {
+                                float adc_delta = cal_high_voltage - cal_low_voltage;
+                                if (adc_delta > 0.05f && adc_delta < 0.5f) {
+                                    // Valid calibration
+                                    // Scale: semitones per ADC unit
+                                    // 24 semitones over adc_delta
+                                    settings.voct_scale = 24.0f / adc_delta;
+                                    
+                                    // Offset: ADC value that corresponds to 0V
+                                    // At 1V, ADC reads cal_low_voltage
+                                    // 0V is 1V below that, so offset = cal_low_voltage - (1V in ADC)
+                                    // 1V in ADC = 24 semitones / scale = adc_delta / 2
+                                    float one_volt_adc = adc_delta / 2.0f;
+                                    settings.voct_offset = cal_low_voltage - one_volt_adc;
+                                    
+                                    hw.PrintLine("Calibration OK!");
+                                    hw.PrintLine("  Offset: %d/1000", (int)(settings.voct_offset * 1000));
+                                    hw.PrintLine("  Scale: %d semi/unit", (int)settings.voct_scale);
+                                    
+                                    // Save calibration
+                                    storage.Save();
+                                } else {
+                                    hw.PrintLine("ERROR: Invalid voltages!");
+                                    hw.PrintLine("  Delta: %d/1000 (expected ~200)", (int)(adc_delta * 1000));
+                                }
+                            }
+                            cal_step = CAL_DONE;
+                            break;
+                            
+                        case CAL_DONE:
+                            // Exit calibration mode
+                            current_mode = MODE_PARAMETERS;
+                            hw.PrintLine("Exited calibration");
+                            break;
+                    }
                 }
             }
             button_was_pressed = false;
@@ -760,11 +852,31 @@ int main(void)
         // LED feedback
         // =======================================================================
         // In Play mode: show engine/bank
-        // In Parameters mode: show page number (blink pattern?)
+        // In Parameters mode: show page number (blink pattern)
+        // In Calibration mode: special pattern for each step
         
         float led_voltage;
         if (current_mode == MODE_PLAY) {
             led_voltage = led.Update(now_ms);
+        } else if (current_mode == MODE_CALIBRATION) {
+            // Calibration mode: distinctive patterns
+            switch (cal_step) {
+                case CAL_WAITING_LOW:
+                    // Single slow pulse
+                    led_voltage = ((now_ms % 1500) < 200) ? 5.0f : 1.5f;
+                    break;
+                case CAL_WAITING_HIGH:
+                    // Double pulse
+                    {
+                        uint32_t phase = now_ms % 1500;
+                        led_voltage = (phase < 150 || (phase > 300 && phase < 450)) ? 5.0f : 1.5f;
+                    }
+                    break;
+                case CAL_DONE:
+                    // Steady bright
+                    led_voltage = 5.0f;
+                    break;
+            }
         } else {
             // Parameters mode: different LED pattern for each page
             // Page 0: slow blink, Page 1: medium blink, Page 2: fast blink
@@ -807,6 +919,14 @@ int main(void)
                 hw.PrintLine("  Note:%d Harm:%d Timb:%d Morph:%d",
                     (int)patch.note, (int)(patch.harmonics * 100), 
                     (int)(patch.timbre * 100), (int)(patch.morph * 100));
+            } else if (current_mode == MODE_CALIBRATION) {
+                // Calibration mode: show CV_5 value and step
+                float cv5 = hw.GetAdcValue(CV_5);
+                const char* step_names[3] = {"1V", "3V", "DONE"};
+                hw.PrintLine("CALIBRATE step:%s | CV5:%d/1000", 
+                    step_names[cal_step], (int)(cv5 * 1000));
+                hw.PrintLine("  Offset:%d Scale:%d", 
+                    (int)(settings.voct_offset * 1000), (int)settings.voct_scale);
             } else {
                 // Parameters mode: show page, knobs, states, and current page values
                 const char* page_names[3] = {"ATTEN", "LPG", "TUNE"};
@@ -833,8 +953,9 @@ int main(void)
                         break;
                     case PAGE_TUNING:
                         // Octave is 0-8, fine tune is -1 to +1
-                        hw.PrintLine("  Octave:%d FineTune:%d",
-                            settings.octave_range, (int)(settings.fine_tune * 100));
+                        hw.PrintLine("  Octave:%d FineTune:%d | Cal:%d,%d",
+                            settings.octave_range, (int)(settings.fine_tune * 100),
+                            (int)(settings.voct_offset * 1000), (int)settings.voct_scale);
                         break;
                     default:
                         break;
