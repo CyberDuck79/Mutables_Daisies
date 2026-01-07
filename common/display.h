@@ -87,15 +87,17 @@ private:
             hw_->display.DrawLine(0, y + 11, name_len * 7 - 1, y + 11, true);
         }
         
-        // Value - draw white background FIRST if editing, then write black text on it
+        // Value - draw top and bottom lines if editing, with inverted text
         FormatValue(param, buffer, sizeof(buffer));
+        int value_len = strlen(buffer);
+        int value_width = value_len * 7;
         if (editing) {
-            // Draw filled white rectangle (chars width * 7px + 4px padding on each side)
-            int text_width = strlen(buffer) * 7 + 8;
-            hw_->display.DrawRect(72, y, text_width, 14, true, true);
+            // Draw white line above and below text
+            hw_->display.DrawLine(76, y + 1, 76 + value_width - 1, y + 1, true);
+            hw_->display.DrawLine(76, y + 12, 76 + value_width - 1, y + 12, true);
         }
         // Write text: if editing use on=false for black-on-white, otherwise on=true for white-on-black
-        hw_->display.SetCursor(76, y + 1);
+        hw_->display.SetCursor(76, y + 2);
         hw_->display.WriteString(buffer, Font_7x10, !editing);
         
         // CV indicator
@@ -122,37 +124,54 @@ private:
         
         switch (item) {
             case SubmenuItem::CVSource:
-                hw_->display.WriteString("Source:", Font_7x10, true);
-                if (editing) {
-                    int text_width = (param.cv_mapping.cv_input < 0 ? 4 : 3) * 7 + 8;
-                    hw_->display.DrawRect(57, y, text_width, 13, true, true);
-                }
-                hw_->display.SetCursor(61, y + 1);
-                if (param.cv_mapping.cv_input < 0) {
-                    hw_->display.WriteString("None", Font_7x10, true);
-                } else {
-                    snprintf(buffer, sizeof(buffer), "CV%d", param.cv_mapping.cv_input + 1);
-                    hw_->display.WriteString(buffer, Font_7x10, true);
+                {
+                    hw_->display.WriteString("Source:", Font_7x10, true);
+                    
+                    if (param.cv_mapping.cv_input < 0) {
+                        snprintf(buffer, sizeof(buffer), "None");
+                    } else {
+                        snprintf(buffer, sizeof(buffer), "CV%d", param.cv_mapping.cv_input + 1);
+                    }
+                    int text_len = strlen(buffer);
+                    int text_width = text_len * 7;
+                    if (editing) {
+                        // Draw white line above and below
+                        hw_->display.DrawLine(61, y + 1, 61 + text_width - 1, y + 1, true);
+                        hw_->display.DrawLine(61, y + 12, 61 + text_width - 1, y + 12, true);
+                    }
+                    hw_->display.SetCursor(61, y + 2);
+                    hw_->display.WriteString(buffer, Font_7x10, !editing);
                 }
                 break;
                 
             case SubmenuItem::Attenuverter:
-                hw_->display.WriteString("Atten:", Font_7x10, true);
-                snprintf(buffer, sizeof(buffer), "%+.2f", param.cv_mapping.attenuverter);
-                if (editing) {
-                    int text_width = strlen(buffer) * 7 + 8;
-                    hw_->display.DrawRect(57, y, text_width, 13, true, true);
+                {
+                    hw_->display.WriteString("Atten:", Font_7x10, true);
+                    snprintf(buffer, sizeof(buffer), "%+.2f", param.cv_mapping.attenuverter);
+                    int atten_len = strlen(buffer);
+                    int atten_width = atten_len * 7;
+                    if (editing) {
+                        // Draw white line above and below
+                        hw_->display.DrawLine(61, y + 1, 61 + atten_width - 1, y + 1, true);
+                        hw_->display.DrawLine(61, y + 12, 61 + atten_width - 1, y + 12, true);
+                    }
+                    hw_->display.SetCursor(61, y + 2);
+                    hw_->display.WriteString(buffer, Font_7x10, !editing);
                 }
-                hw_->display.SetCursor(61, y + 1);
-                hw_->display.WriteString(buffer, Font_7x10, true);
                 break;
                 
             case SubmenuItem::CaptureOrigin:
-                if (editing) {
-                    hw_->display.DrawRect(5, y, 15 * 7 + 8, 13, true, true);
+                {
+                    const char* text = "Capture Origin";
+                    int capture_width = 14 * 7;  // 14 chars
+                    if (editing) {
+                        // Draw white line above and below
+                        hw_->display.DrawLine(8, y + 1, 8 + capture_width - 1, y + 1, true);
+                        hw_->display.DrawLine(8, y + 12, 8 + capture_width - 1, y + 12, true);
+                    }
+                    hw_->display.SetCursor(8, y + 2);
+                    hw_->display.WriteString(text, Font_7x10, !editing);
                 }
-                hw_->display.SetCursor(9, y + 1);
-                hw_->display.WriteString("Capture Origin", Font_7x10, !editing);
                 break;
                 
             default:
