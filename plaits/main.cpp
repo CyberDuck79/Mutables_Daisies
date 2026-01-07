@@ -164,17 +164,22 @@ int main(void) {
     hw.StartAudio(AudioCallback);
     
     // Main loop
+    uint32_t last_display_update = 0;
     while(1) {
-        // Process hardware controls (encoder, gates, etc.)
+        // Process hardware controls (encoder, gates, etc.) - run fast for encoder responsiveness
         hw.ProcessAllControls();
         
-        // Update encoder
+        // Update encoder state
         UpdateEncoder();
         
         // Update display at ~60Hz
-        UpdateDisplay();
+        uint32_t now = System::GetNow();
+        if (now - last_display_update >= 16) {
+            last_display_update = now;
+            UpdateDisplay();
+        }
         
-        // Small delay to prevent overwhelming the display
-        System::Delay(16);
+        // Minimal delay to prevent busy-wait
+        System::Delay(1);
     }
 }
