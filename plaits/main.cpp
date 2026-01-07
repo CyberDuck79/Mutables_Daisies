@@ -164,13 +164,16 @@ int main(void) {
     
     // Main loop
     while(1) {
-        // Update controls at ~100Hz
-        System::Delay(10);
+        // Process hardware controls (encoder, gates, etc.)
+        hw.ProcessAllControls();
         
         // Update encoder
         UpdateEncoder();
         
-        // Update display
+        // Update display at ~60Hz
         UpdateDisplay();
+        
+        // Small delay to prevent overwhelming the display
+        System::Delay(16);
     }
 }

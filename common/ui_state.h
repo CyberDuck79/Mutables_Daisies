@@ -28,7 +28,7 @@ struct MenuState {
     SubmenuItem selected_submenu_item;
     int submenu_param_index;  // Which parameter's submenu we're in
     
-    // Display settings
+    // Display settings - 64px screen / 14px line spacing (Font_7x10) = 4 visible parameters
     static constexpr int VISIBLE_PARAMS = 4;
     
     MenuState() 
