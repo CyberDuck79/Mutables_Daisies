@@ -84,6 +84,22 @@ struct Parameter {
         value = std::clamp(value, min, max);
     }
     
+    // Set from normalized value with hysteresis to prevent jitter
+    // Only updates if change is greater than tolerance
+    bool SetNormalizedWithHysteresis(float normalized, float tolerance = 0.005f) {
+        float new_value = min + normalized * (max - min);
+        new_value = std::clamp(new_value, min, max);
+        
+        // Check if change is significant enough
+        float diff = std::abs(new_value - value);
+        float range = max - min;
+        if (diff > range * tolerance) {
+            value = new_value;
+            return true;
+        }
+        return false;
+    }
+    
     // Get integer index for enum/integer params
     int GetIndex() const {
         return static_cast<int>(value + 0.5f);

@@ -52,10 +52,11 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     for (size_t i = 0; i < param_count; i++) {
         auto& param = params[i];
         if (param.cv_mapping.active && param.cv_mapping.cv_input >= 0) {
-            float knob_value = param.GetNormalized();
-            float cv_value = cv_inputs.GetFiltered(param.cv_mapping.cv_input);
-            float result = CVInput::ProcessWithMapping(param, knob_value, cv_value);
-            param.SetNormalized(result);
+            // Read actual hardware knob position (knob + CV on DaisyPatch)
+            // Filtering is already applied in cv_inputs.GetFiltered()
+            float knob_value = cv_inputs.GetFiltered(param.cv_mapping.cv_input);
+            // Use minimal hysteresis to prevent noise (0.1% threshold)
+            param.SetNormalizedWithHysteresis(knob_value, 0.001f);
         }
     }
     

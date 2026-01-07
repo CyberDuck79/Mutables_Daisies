@@ -32,9 +32,22 @@ public:
     
     // Simple one-pole lowpass filter for CV input
     // Helps reduce noise and jitter from CV inputs
-    float Filter(float input, float coefficient = 0.01f) {
+    float Filter(float input, float coefficient = 0.02f) {
+        // Scale input from actual ADC range to full 0.0-1.0
+        // Pots physically don't reach exact 0.0/1.0, typically ~0.03 to ~0.96
+        const float adc_min = 0.025f;
+        const float adc_max = 0.97f;
+        input = (input - adc_min) / (adc_max - adc_min);
+        input = std::clamp(input, 0.0f, 1.0f);
+        
         filtered_value_ += coefficient * (input - filtered_value_);
-        return filtered_value_;
+        
+        // Snap to edges for display (0.99 rounds to 1.00, 0.00x rounds to 0.00)
+        float output = filtered_value_;
+        if (output < 0.01f) output = 0.0f;
+        if (output > 0.99f) output = 1.0f;
+        
+        return output;
     }
     
     void Reset() {

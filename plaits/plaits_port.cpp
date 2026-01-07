@@ -63,10 +63,25 @@ void PlaitsPort::SetupParameters() {
     params_[0] = mutables_ui::Parameter("Engine", engine_names_, kNumEngines);
     
     params_[1] = mutables_ui::Parameter("Harmonics", 0.0f, 1.0f);
+    params_[1].cv_mapping.cv_input = 1;  // CV 2
+    params_[1].cv_mapping.active = true;
+    params_[1].cv_mapping.attenuverter = 1.0f;
+    
     params_[2] = mutables_ui::Parameter("Timbre", 0.0f, 1.0f);
+    params_[2].cv_mapping.cv_input = 2;  // CV 3
+    params_[2].cv_mapping.active = true;
+    params_[2].cv_mapping.attenuverter = 1.0f;
+    
     params_[3] = mutables_ui::Parameter("Morph", 0.0f, 1.0f);
+    params_[3].cv_mapping.cv_input = 3;  // CV 4
+    params_[3].cv_mapping.active = true;
+    params_[3].cv_mapping.attenuverter = 1.0f;
+    
     params_[4] = mutables_ui::Parameter("Frequency", 0.0f, 1.0f);
     params_[4].value = 0.5f;  // Middle C
+    params_[4].cv_mapping.cv_input = 0;  // CV 1
+    params_[4].cv_mapping.active = true;
+    params_[4].cv_mapping.attenuverter = 1.0f;
     
     params_[5] = mutables_ui::Parameter("LPG Colour", 0.0f, 1.0f);
     params_[6] = mutables_ui::Parameter("LPG Decay", 0.0f, 1.0f);

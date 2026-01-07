@@ -91,20 +91,30 @@ private:
         FormatValue(param, buffer, sizeof(buffer));
         int value_len = strlen(buffer);
         int value_width = value_len * 7;
+        
         if (editing) {
-            // Draw white line above and below text
+            // Draw white line above and below VALUE ONLY
             hw_->display.DrawLine(76, y + 1, 76 + value_width - 1, y + 1, true);
             hw_->display.DrawLine(76, y + 12, 76 + value_width - 1, y + 12, true);
         }
-        // Write text: if editing use on=false for black-on-white, otherwise on=true for white-on-black
+        
+        // Write value text
         hw_->display.SetCursor(76, y + 2);
         hw_->display.WriteString(buffer, Font_7x10, !editing);
         
-        // CV indicator
+        // Draw CV indicator separately if present - ALWAYS with top/bottom lines
         if (param.cv_mapping.active && param.cv_mapping.cv_input >= 0) {
-            hw_->display.SetCursor(107, y + 1);
-            snprintf(buffer, sizeof(buffer), "CV%d", param.cv_mapping.cv_input + 1);
-            hw_->display.WriteString(buffer, Font_7x10, true);
+            int cv_x = 76 + value_width + 7;  // After value + one space width
+            
+            // Draw white lines above and below CV number (always)
+            hw_->display.DrawLine(cv_x, y + 1, cv_x + 6, y + 1, true);
+            hw_->display.DrawLine(cv_x, y + 12, cv_x + 6, y + 12, true);
+            
+            hw_->display.DrawRect(cv_x, y + 2, 7, 10, true, true);  // White background
+            hw_->display.SetCursor(cv_x, y + 2);
+            char cv_num[2];
+            snprintf(cv_num, sizeof(cv_num), "%d", param.cv_mapping.cv_input + 1);
+            hw_->display.WriteString(cv_num, Font_7x10, false);  // Black text on white
         }
         
         // Submenu indicator
@@ -191,11 +201,23 @@ private:
                 snprintf(buffer, size, "%d", param.GetIndex());
                 break;
             case ParamType::Bipolar:
-                snprintf(buffer, size, "%+.2f", param.value);
+                {
+                    // Custom float formatting: multiply by 100, format as X.XX
+                    int val_int = (int)(param.value * 100.0f);
+                    int whole = val_int / 100;
+                    int frac = (val_int < 0 ? -val_int : val_int) % 100;
+                    snprintf(buffer, size, "%+d.%02d", whole, frac);
+                }
                 break;
             case ParamType::Continuous:
             default:
-                snprintf(buffer, size, "%.2f", param.value);
+                {
+                    // Custom float formatting: multiply by 100, format as X.XX
+                    int val_int = (int)(param.value * 100.0f);
+                    int whole = val_int / 100;
+                    int frac = val_int % 100;
+                    snprintf(buffer, size, "%d.%02d", whole, frac);
+                }
                 break;
         }
     }
