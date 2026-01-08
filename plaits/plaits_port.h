@@ -62,14 +62,24 @@ private:
     
     int current_bank_;
     
+    // MIDI state
+    float midi_note_;      // Current MIDI note (0-127)
+    bool midi_gate_;       // Gate from MIDI note on/off
+    
     // State
     bool gate_state_;
+    bool previous_gate_;   // For trigger detection
     float sample_rate_;
     
     void UpdatePatchFromParams();
     void SetupParameters();
     void UpdateEngineListForBank(int bank);
     int GetActualEngineIndex(int bank, int engine_in_bank);
+    
+public:
+    // MIDI interface
+    void NoteOn(uint8_t note, uint8_t velocity);
+    void NoteOff(uint8_t note, uint8_t velocity);
 };
 
 } // namespace mutables_plaits

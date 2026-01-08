@@ -53,7 +53,10 @@ PlaitsPort::PlaitsPort()
     , modulations_(nullptr)
     , allocator_(nullptr)
     , current_bank_(0)
+    , midi_note_(60.0f)
+    , midi_gate_(false)
     , gate_state_(false)
+    , previous_gate_(false)
     , sample_rate_(48000.0f) {
 }
 
@@ -75,6 +78,21 @@ void PlaitsPort::Init(float sample_rate) {
     
     // Initialize voice with buffer allocator
     voice_->Init(allocator_);
+    
+    // Initialize modulations to zero
+    modulations_->engine = 0.0f;
+    modulations_->note = 0.0f;
+    modulations_->frequency = 0.0f;
+    modulations_->harmonics = 0.0f;
+    modulations_->timbre = 0.0f;
+    modulations_->morph = 0.0f;
+    modulations_->trigger = 0.0f;
+    modulations_->level = 0.8f;
+    modulations_->frequency_patched = false;
+    modulations_->timbre_patched = false;
+    modulations_->morph_patched = false;
+    modulations_->trigger_patched = false;
+    modulations_->level_patched = false;
     
     // Setup parameters
     SetupParameters();
@@ -103,8 +121,9 @@ void PlaitsPort::SetupParameters() {
     params_[4].cv_mapping.active = true;
     params_[4].cv_mapping.attenuverter = 1.0f;
     
-    params_[5] = mutables_ui::Parameter("Frequency", 0.0f, 1.0f);
-    params_[5].value = 0.5f;  // Middle C
+    // Transpose: 0.5 = no transpose, 0.0 = -12 semitones, 1.0 = +12 semitones
+    params_[5] = mutables_ui::Parameter("Transpose", 0.0f, 1.0f);
+    params_[5].value = 0.5f;  // No transpose
     params_[5].cv_mapping.cv_input = 0;  // CV 1
     params_[5].cv_mapping.active = true;
     params_[5].cv_mapping.attenuverter = 1.0f;
@@ -160,11 +179,18 @@ void PlaitsPort::UpdatePatchFromParams() {
     int engine_in_bank = params_[1].GetIndex();
     patch_->engine = GetActualEngineIndex(bank, engine_in_bank);
     
-    // Main parameters (normalized 0-1 to 0-65535)
-    patch_->note = params_[5].value * 128.0f;  // MIDI note range
+    // MIDI note + transpose (0.5 = no transpose, 0.0 = -12, 1.0 = +12)
+    float transpose = (params_[5].value - 0.5f) * 24.0f;  // +-12 semitones
+    patch_->note = midi_note_ + transpose;
+    
     patch_->harmonics = params_[2].value;
     patch_->timbre = params_[3].value;
     patch_->morph = params_[4].value;
+    
+    // Modulation amounts (for internal envelope routing)
+    patch_->frequency_modulation_amount = 0.0f;
+    patch_->timbre_modulation_amount = 0.0f;
+    patch_->morph_modulation_amount = 0.0f;
     
     // LPG parameters
     patch_->lpg_colour = params_[6].value;
@@ -182,13 +208,17 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
     for (size_t i = 0; i < size; i += kBlockSize) {
         size_t block_size = (i + kBlockSize <= size) ? kBlockSize : (size - i);
         
-        // Set modulations (from CV inputs - will be connected later)
-        modulations_->trigger = gate_state_ ? 0.8f : 0.0f;
+        // Use MIDI gate OR hardware gate
+        bool active_gate = midi_gate_ || gate_state_;
+        
+        // Set modulations - keep trigger high while gate is active
+        // Plaits does its own edge detection internally
+        modulations_->trigger = active_gate ? 1.0f : 0.0f;
         modulations_->level = params_[8].value;
         modulations_->frequency_patched = false;
         modulations_->timbre_patched = false;
         modulations_->morph_patched = false;
-        modulations_->trigger_patched = false;
+        modulations_->trigger_patched = true;
         modulations_->level_patched = false;
         
         // Render audio
@@ -219,6 +249,18 @@ void PlaitsPort::ProcessGate(int gate_index, bool state) {
 float PlaitsPort::GetCVOutput(int cv_index) {
     // Could output envelope or other modulation signals
     return 0.0f;
+}
+
+void PlaitsPort::NoteOn(uint8_t note, uint8_t velocity) {
+    midi_note_ = static_cast<float>(note);
+    midi_gate_ = true;
+}
+
+void PlaitsPort::NoteOff(uint8_t note, uint8_t velocity) {
+    // Only release if it's the same note (monophonic)
+    if (static_cast<uint8_t>(midi_note_) == note) {
+        midi_gate_ = false;
+    }
 }
 
 } // namespace mutables_plaits

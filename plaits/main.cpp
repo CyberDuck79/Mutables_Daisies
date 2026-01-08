@@ -69,7 +69,15 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
         audio_out[i] = out[i];
     }
     
-    // Process audio
+    // Clear all outputs first
+    for (size_t i = 0; i < size; i++) {
+        out[0][i] = 0.0f;
+        out[1][i] = 0.0f;
+        out[2][i] = 0.0f;
+        out[3][i] = 0.0f;
+    }
+    
+    // Process audio - Plaits writes to audio_out[0] and audio_out[1]
     plaits_module.Process(audio_in, audio_out, size);
 }
 
@@ -136,6 +144,26 @@ void UpdateEncoder() {
     }
 }
 
+void ProcessMidi() {
+    // Process all pending MIDI messages from hw.midi (UART MIDI input jack)
+    while (hw.midi.HasEvents()) {
+        MidiEvent event = hw.midi.PopEvent();
+        
+        if (event.type == NoteOn) {
+            NoteOnEvent note = event.AsNoteOn();
+            if (note.velocity > 0) {
+                plaits_module.NoteOn(note.note, note.velocity);
+            } else {
+                // Note on with velocity 0 = note off
+                plaits_module.NoteOff(note.note, 0);
+            }
+        } else if (event.type == NoteOff) {
+            NoteOffEvent note = event.AsNoteOff();
+            plaits_module.NoteOff(note.note, note.velocity);
+        }
+    }
+}
+
 void UpdateDisplay() {
     auto params = plaits_module.GetParameters();
     
@@ -147,7 +175,7 @@ void UpdateDisplay() {
 }
 
 int main(void) {
-    // Initialize hardware
+    // Initialize hardware (includes MIDI UART)
     hw.Init();
     hw.SetAudioBlockSize(24); // Plaits block size
     hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);
@@ -166,10 +194,15 @@ int main(void) {
     // Start audio
     hw.StartAdc();
     hw.StartAudio(AudioCallback);
+    hw.midi.StartReceive();
     
     // Main loop
     uint32_t last_display_update = 0;
     while(1) {
+        // Process MIDI
+        hw.midi.Listen();
+        ProcessMidi();
+        
         // Process hardware controls (encoder, gates, etc.) - run fast for encoder responsiveness
         hw.ProcessAllControls();
         

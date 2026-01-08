@@ -1,6 +1,5 @@
 # My notes TODO
 ## Features
-- a bank value changig engine list + add the third bank + check the names
 - note and gate from midi
 - remove default mapping
 - add mapping submenu
