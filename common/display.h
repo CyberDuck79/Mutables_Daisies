@@ -16,6 +16,24 @@ public:
         hw_ = hw;
     }
     
+    // Render boot screen with module name
+    void RenderBootScreen(const char* module_name) {
+        if (!hw_) return;
+        
+        hw_->display.Fill(false);
+        
+        // Calculate center position for the text
+        // Font_7x10: 7px wide per character, display is 128px wide
+        int text_len = strlen(module_name);
+        int x = (128 - (text_len * 7)) / 2;
+        int y = (64 - 10) / 2;  // Center vertically (10px font height)
+        
+        hw_->display.SetCursor(x, y);
+        hw_->display.WriteString(module_name, Font_7x10, true);
+        
+        hw_->display.Update();
+    }
+    
     // Render main parameter menu
     void RenderMenu(const MenuState& menu, Parameter* params) {
         if (!hw_) return;

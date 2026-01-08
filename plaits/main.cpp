@@ -159,6 +159,10 @@ int main(void) {
     menu.param_count = plaits_module.GetParameterCount();
     display.Init(&hw);
     
+    // Show boot screen
+    display.RenderBootScreen("PLAITS");
+    System::Delay(2800);
+    
     // Start audio
     hw.StartAdc();
     hw.StartAudio(AudioCallback);

@@ -47,12 +47,20 @@ private:
     uint8_t buffer_[kBufferSize];
     
     // Parameters
-    static constexpr int kNumParams = 8;
+    static constexpr int kNumParams = 9;  // Added Bank parameter
     std::array<mutables_ui::Parameter, kNumParams> params_;
     
-    // Engine names for enum parameter
-    static const char* engine_names_[];
-    static constexpr int kNumEngines = 16;
+    // Bank and engine system
+    static const char* bank_names_[];
+    static const char* synth_engine_names_[];
+    static const char* drum_engine_names_[];
+    static const char* new_engine_names_[];
+    static constexpr int kNumBanks = 3;
+    static constexpr int kNumSynthEngines = 8;
+    static constexpr int kNumDrumEngines = 8;
+    static constexpr int kNumNewEngines = 8;
+    
+    int current_bank_;
     
     // State
     bool gate_state_;
@@ -60,6 +68,8 @@ private:
     
     void UpdatePatchFromParams();
     void SetupParameters();
+    void UpdateEngineListForBank(int bank);
+    int GetActualEngineIndex(int bank, int engine_in_bank);
 };
 
 } // namespace mutables_plaits
