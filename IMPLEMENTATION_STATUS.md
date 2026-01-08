@@ -1,272 +1,224 @@
 # Mutable Instruments Daisy Port - Implementation Status
 
+## Architecture Overview
+
+### Design Principles
+1. **MIDI over V/Oct**: Use MIDI for pitch/gate instead of CV, gaining polyphony and velocity
+2. **Unified Attenuverter Emulation**: Since Daisy Patch sums knob+CV before ADC, we capture offset on "plugged" activation
+3. **Original Firmware Compatibility**: Pass plugged/attenuverter status to original code when supported
+4. **Flexible Mapping**: Any parameter can be mapped to CV, Gate, or MIDI CC
+
+---
+
 ## Common Library (`common/`)
 
-### ✅ Fully Implemented
+### Parameter System (`parameter.h`)
 
-#### `parameter.h` - Parameter System
-- **Features:**
-  - 5 parameter types: Continuous, Bipolar, Enum, Toggle, Integer
-  - CV mapping structure with attenuverter simulation
-  - Normalized value conversion (0.0-1.0)
-  - Enum label retrieval
-  - Parameter index calculation
-- **Status:** Complete and functional
+| Feature | Status | Notes |
+|---------|--------|-------|
+| KNOB type (continuous) | ✅ Done | Basic implementation |
+| KNOB attenuverter | ⚠️ Partial | Offset capture TODO |
+| KNOB velocity mod | ❌ TODO | |
+| CV type (direct) | ⚠️ Partial | Read-only display TODO |
+| ENUM type | ✅ Done | Gate mapping TODO |
+| ENUM gate trigger modes | ❌ TODO | rise/fall/both |
+| ENUM gate actions | ❌ TODO | ++/--/+-/-+ |
+| MIDI type (channel) | ❌ TODO | |
+| SUB type (submenu container) | ❌ TODO | |
+| SAVE type | ❌ TODO | Character input UI |
+| LOAD type | ❌ TODO | Preset list browser |
 
-#### `ui_state.h` - UI State Machine
-- **Features:**
-  - 4 UI states: Navigate, EditValue, Submenu, SubmenuEdit
-  - Menu scrolling with visible window (4 parameters)
-  - Parameter navigation (next/prev with wraparound)
-  - Submenu enter/exit logic
-- **Status:** Complete
+### CV Input Processing (`cv_input.h`)
 
-#### `cv_input.h` - CV Input Processing
-- **Features:**
-  - Attenuverter simulation with origin offset
-  - CV scaling relative to captured origin point
-  - One-pole lowpass filtering for noise reduction
-  - CVInputBank managing 4 CV inputs
-  - Filtered and raw value access
-- **Status:** Complete and functional
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Raw value reading | ✅ Done | |
+| Lowpass filtering | ✅ Done | Reduces noise |
+| ADC range scaling | ✅ Done | 0.03-0.96 → 0.0-1.0 |
+| Snap-to-edge | ✅ Done | <0.01→0, >0.99→1 |
+| Hysteresis | ✅ Done | 0.1% threshold |
+| Offset capture | ⚠️ Partial | Need UI integration |
+| Attenuverter calculation | ⚠️ Partial | Formula implemented |
 
-#### `display.h` - OLED Display Rendering
-- **Features:**
-  - Main parameter menu rendering
-  - CV mapping submenu rendering
-  - Parameter value formatting (float, enum, toggle, bipolar)
-  - Selection indicators (> symbol)
-  - CV assignment display (CV1-4)
-  - Editing mode highlighting (inverted text)
-- **Status:** Complete
+### UI State Machine (`ui_state.h`)
 
-#### `module_base.h` - Module Interface
-- **Features:**
-  - Abstract base class for all module ports
-  - Module identification (name, short name)
-  - Lifecycle methods (Init, Process)
-  - Parameter access interface
-  - Optional gate/CV output handling
-  - Optional MIDI handling
-- **Status:** Complete
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Navigate state | ✅ Done | |
+| EditValue state | ✅ Done | |
+| Submenu state | ⚠️ Partial | Basic structure |
+| SubmenuEdit state | ❌ TODO | |
+| Parameter scrolling | ✅ Done | 4 visible parameters |
+| Long press detection | ✅ Done | 500ms threshold |
 
-### ⚠️ Partially Implemented / Stubs
+### Display Rendering (`display.h`)
 
-#### `preset_manager.h` - SD Card Preset System
-- **Implemented:**
-  - Preset structure definition
-  - Init/Save/Load/List interface
-- **Missing:**
-  - ❌ SD card initialization
-  - ❌ Directory creation/scanning
-  - ❌ Binary or JSON serialization
-  - ❌ File I/O operations
-- **Status:** Interface defined, implementation TODO
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Parameter list | ✅ Done | Font_7x10 |
+| Value formatting | ✅ Done | Custom X.XX format |
+| Selection indicator | ✅ Done | Underline |
+| Edit highlighting | ✅ Done | Inverted text |
+| Mapping indicator | ⚠️ Partial | CV only, need Gate/CC |
+| Boot screen | ✅ Done | 3 second splash |
+| Submenu rendering | ⚠️ Partial | Basic structure |
+| Character input UI | ❌ TODO | For SAVE |
+| Preset list UI | ❌ TODO | For LOAD |
+| Error messages | ❌ TODO | SD card errors |
+
+### Preset Manager (`preset_manager.h`)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| SD card detection | ❌ TODO | |
+| Directory creation | ❌ TODO | `<module>/presets/` |
+| Preset save | ❌ TODO | Binary serialization |
+| Preset load | ❌ TODO | |
+| Preset listing | ❌ TODO | |
+
+### Module Base (`module_base.h`)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Abstract interface | ✅ Done | |
+| Parameter access | ✅ Done | |
+| Gate I/O | ✅ Done | |
+| MIDI handling | ⚠️ Partial | Note on/off only |
 
 ---
 
 ## Plaits Port (`plaits/`)
 
-### ✅ Fully Implemented
+### DSP Integration
 
-#### DSP Integration
-- **Features:**
-  - All 24 Plaits engines compiled and linked
-  - Complete Plaits voice architecture
-  - Buffer allocation system (32KB buffer)
-  - Frame-based rendering (24 samples per block)
-  - Audio conversion (int16 → float)
-  - Engine switching at runtime
-- **Engines:**
-  - Original 16: Pair, WavTrn, FM, Grain, Addtv, WavTbl, Chord, Speech, Swarm, Noise, Partcl, String, Modal, Kick, Snare, HiHat
-  - Extended 8: String Machine, VCF, Phase Dist, Six-Op, Wave Terrain, Chiptune
-- **Status:** Complete
+| Feature | Status | Notes |
+|---------|--------|-------|
+| All 24 engines | ✅ Done | Compiled and linked |
+| Voice architecture | ✅ Done | |
+| Buffer allocation | ✅ Done | 32KB |
+| Audio rendering | ✅ Done | 24 samples/block |
+| Engine switching | ✅ Done | Runtime |
 
-#### Parameter Mapping
-- **Parameters (8 total):**
-  1. Engine (enum, 24 options)
-  2. Harmonics (continuous 0-1)
-  3. Timbre (continuous 0-1)
-  4. Morph (continuous 0-1)
-  5. Frequency (continuous 0-1, maps to MIDI note)
-  6. LPG Colour (continuous 0-1)
-  7. LPG Decay (continuous 0-1)
-  8. Level (continuous 0-1)
-- **Status:** All core Plaits parameters mapped
+### Parameter Mapping
 
-#### Hardware Integration
-- **Audio:**
-  - ✅ 48kHz sample rate
-  - ✅ 24-sample block processing
-  - ✅ Stereo output (main + aux)
-  - ✅ Audio callback integration
-- **Gates:**
-  - ✅ Gate input 1 → trigger
-  - ❌ Gate input 2 not used
-  - ❌ Gate outputs not implemented
-- **Status:** Basic audio I/O working
+| Parameter | Type | CV Map | Status |
+|-----------|------|--------|--------|
+| Bank | ENUM | - | ✅ Done |
+| Engine | ENUM | - | ✅ Done |
+| Harmonics | KNOB | CV2 | ✅ Done |
+| Timbre | KNOB | CV3 | ✅ Done |
+| Morph | KNOB | CV4 | ✅ Done |
+| Transpose | KNOB | CV1 | ✅ Done (±12 semi) |
+| LPG Colour | KNOB | - | ✅ Done |
+| LPG Decay | KNOB | - | ✅ Done |
+| Level | KNOB | - | ✅ Done |
 
-#### UI Implementation (`main.cpp`)
-- **Encoder Navigation:**
-  - ✅ Rotate: scroll parameters
-  - ✅ Short press: enter edit mode
-  - ✅ Long press: enter/exit submenu
-  - ✅ Parameter value editing with encoder
-- **Display:**
-  - ✅ Parameter list rendering
-  - ✅ Real-time value updates
-  - ✅ Selection indicators
-- **Status:** Basic navigation functional
+### Engine Banks
 
-#### Build System
-- **Features:**
-  - ✅ Makefile with .cc file compilation
-  - ✅ Bootloader support (BOOT_QSPI)
-  - ✅ All Plaits source files included
-  - ✅ Resource files (lookup tables)
-  - ✅ User data stub (hardware-independent)
-  - ✅ Optimization flags
-- **Memory:**
-  - QSPI Flash: 266KB / 7936KB (3.28%)
-  - SRAM: 87KB / 512KB (16.59%)
-- **Status:** Complete and optimized
+| Bank | Engines | Status |
+|------|---------|--------|
+| Synth | VA, WavShp, FM, Grain, Addtv, WavTbl, Chord, Speech | ✅ Done |
+| Drum | Swarm, Noise, Partcl, String, Modal, Kick, Snare, HiHat | ✅ Done |
+| New | VA VCF, PhasDs, 6-Op×3, WavTrn, StrMch, Chip | ✅ Done |
 
-### ⚠️ Partially Implemented
+### Hardware I/O
 
-#### CV Input Integration
-- **Implemented:**
-  - ✅ Reading 4 knob values
-  - ✅ CV filtering
-  - ✅ Parameter update from CV mappings
-- **Missing:**
-  - ❌ Actual CV input reading (only knobs currently)
-  - ❌ CV input normalization/scaling
-  - ❌ Note: Hardware API shows `GetKnobValue()` but CV inputs need different API
-- **Status:** Framework ready, hardware integration incomplete
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Audio out 1 (Main) | ✅ Done | Plaits OUT |
+| Audio out 2 (Aux) | ✅ Done | Plaits AUX |
+| Audio out 3-4 | ✅ Done | Cleared (silent) |
+| Gate input 1 | ✅ Done | Trigger |
+| MIDI input (TRS) | ✅ Done | Note on/off |
+| Encoder | ✅ Done | Fast 1ms polling |
+| Display | ✅ Done | 60Hz refresh |
 
-#### CV Mapping Submenu
-- **Implemented:**
-  - ✅ Submenu state machine
-  - ✅ Submenu rendering
-  - ✅ Long press to enter
-- **Missing:**
-  - ❌ CV source selection (None/CV1-4)
-  - ❌ Attenuverter editing
-  - ❌ Origin capture button
-  - ❌ Submenu navigation (up/down items)
-  - ❌ Submenu value editing
-- **Status:** UI designed, interaction logic TODO
+### MIDI Implementation
 
-#### Modulation Inputs
-- **Implemented:**
-  - ✅ Basic modulation structure
-  - ✅ Trigger/level modulation
-- **Missing:**
-  - ❌ Frequency modulation from CV
-  - ❌ Timbre modulation from CV
-  - ❌ Morph modulation from CV
-  - ❌ Modulation depth control
-- **Status:** Structure ready, CV routing TODO
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Note On → Pitch + Gate | ✅ Done | Monophonic |
+| Note Off → Gate release | ✅ Done | Same note check |
+| Velocity | ❌ TODO | For accent/level |
+| CC mapping | ❌ TODO | |
+| Channel selection | ❌ TODO | |
+| Polyphony | ❌ TODO | |
 
-### ❌ Not Implemented
+### TODO for Plaits
 
-#### CV Outputs
-- **Missing:**
-  - ❌ CV output 1 & 2 not assigned
-  - ❌ Envelope follower output
-  - ❌ LFO output
-  - ❌ Modulation signals output
-- **Status:** Not started
-
-#### Gate Outputs
-- **Missing:**
-  - ❌ Gate output 1 & 2 not assigned
-  - ❌ Trigger output
-  - ❌ Clock output
-- **Status:** Not started
-
-#### MIDI
-- **Missing:**
-  - ❌ MIDI input processing
-  - ❌ Note on/off handling
-  - ❌ CC parameter control
-  - ❌ Pitch bend
-  - ❌ MIDI clock
-- **Status:** Not started
-
-#### Presets
-- **Missing:**
-  - ❌ SD card initialization
-  - ❌ Preset save/load
-  - ❌ Preset browsing
-  - ❌ Quick recall system
-- **Status:** Not started
-
-#### User Sample Loading
-- **Missing:**
-  - ❌ SD card sample reading
-  - ❌ Sample bank loading
-  - ❌ Wavetable loading
-  - ❌ User wavetable support
-- **Note:** Plaits can use user samples for some engines
-- **Status:** Stubbed out
-
-#### Additional Features
-- **Missing:**
-  - ❌ Calibration routine
-  - ❌ Settings menu
-  - ❌ Firmware version display
-  - ❌ Parameter value smoothing
-  - ❌ Screen saver
-- **Status:** Not started
+| Feature | Priority | Notes |
+|---------|----------|-------|
+| MIDI channel parameter | High | Add MIDI type param |
+| Velocity → Level/Accent | High | |
+| CC → Parameters | Medium | |
+| CV Output config (SUB) | Medium | Envelope/LFO selection |
+| Gate mapping for Bank/Engine | Medium | |
+| SAVE/LOAD presets | Medium | |
+| Click reduction | Low | Investigate further |
 
 ---
 
-## Priority Implementation Order
+## Implementation Priority
 
-### High Priority (Core Functionality)
-1. **CV Input Hardware Integration** - Connect actual CV inputs to parameters
-2. **CV Mapping Submenu Logic** - Make attenuverter configuration functional
-3. **Gate Output Assignment** - Basic trigger/envelope output
-4. **Parameter Smoothing** - Reduce zipper noise on parameter changes
+### Phase 1: Core Parameter System (Current)
+- [x] Basic parameter types working
+- [x] MIDI note input (TRS jack)
+- [x] Bank/Engine system
+- [ ] **KNOB submenu: plugged + offset capture**
+- [ ] **KNOB submenu: attenuverter editing**
+- [ ] **Mapping indicator display (Gate/CC)**
 
-### Medium Priority (Enhanced Functionality)
-5. **MIDI Input** - Note on/off, CC control
-6. **CV Outputs** - Envelope/modulation signals
-7. **Preset System** - Save/load configurations
-8. **Settings Menu** - Global configuration
+### Phase 2: Enhanced Mapping
+- [ ] ENUM gate trigger modes (rise/fall/both)
+- [ ] ENUM gate actions (++/--/+-/-+)
+- [ ] MIDI CC mapping
+- [ ] MIDI type parameter (channel selection)
+- [ ] Velocity modulation
 
-### Low Priority (Nice to Have)
-9. **User Sample Loading** - Custom wavetables/samples
-10. **MIDI Clock** - Tempo sync
-11. **Calibration** - Fine-tune CV scaling
-12. **Screen Saver** - OLED burn-in protection
+### Phase 3: Preset System
+- [ ] SD card initialization
+- [ ] SAVE parameter type + character input UI
+- [ ] LOAD parameter type + preset browser UI
+- [ ] Preset serialization
+
+### Phase 4: Advanced Features
+- [ ] SUB parameter type
+- [ ] CV output configuration for Plaits
+- [ ] Polyphonic MIDI
+- [ ] MIDI clock → Gate output
 
 ---
 
-## Testing Checklist
+## Memory Usage (Plaits)
+
+| Region | Used | Total | % |
+|--------|------|-------|---|
+| QSPI Flash | 271KB | 7936KB | 3.3% |
+| SRAM | 87KB | 512KB | 16.6% |
+| RAM_D2_DMA | 17KB | 32KB | 52% |
+
+---
+
+## Testing Status
 
 ### ✅ Verified Working
-- Compilation and linking
-- Bootloader integration
-- Memory allocation
-- Parameter system
-- UI state machine
+- Audio output (out 1 & 2)
+- Encoder navigation
 - Display rendering
+- Gate input triggering
+- MIDI input (TRS jack)
+- All 24 engines
+- Bank switching
+- Parameter editing
+- Transpose (±12 semitones)
 
-### 🔄 Needs Testing on Hardware
-- Audio output quality
-- Encoder responsiveness
-- Display refresh rate
-- Gate input detection
-- Knob reading
-- Engine switching
-- Parameter updates
+### 🔄 Needs Testing
+- CV input with attenuverter emulation
+- Long envelope retrigger (clicks reported)
+- Harmonics parameter effect (reported not working - may be engine-dependent)
 
-### ❌ Cannot Test Yet (Not Implemented)
-- CV input reading
-- CV mapping workflow
-- MIDI functionality
+### ❌ Not Yet Testable
 - Preset save/load
-- Gate outputs
-- CV outputs
+- Gate mapping for enums
+- MIDI CC control
+- Velocity modulation
