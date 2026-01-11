@@ -27,6 +27,9 @@ bool encoder_button_last = false;
 uint32_t encoder_press_time = 0;
 const uint32_t LONG_PRESS_MS = 500;
 
+// CC values storage (0.0 to 1.0)
+float cc_values[128] = {0.0f};
+
 // Audio buffers
 float* audio_in[4];
 float* audio_out[4];
@@ -155,21 +158,61 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     // Update parameters from CV mappings
     auto params = plaits_module.GetParameters();
     size_t param_count = plaits_module.GetParameterCount();
+    
+    // Calculate CV signals for Plaits modulation inputs
+    // These are the raw CV signals (current - offset) that Plaits will attenuate
+    float frequency_cv = 0.0f;
+    float timbre_cv = 0.0f;
+    float morph_cv = 0.0f;
+    
     for (size_t i = 0; i < param_count; i++) {
         auto& param = params[i];
-        if (param.type == ParamType::KNOB && param.mapping.IsCVSource()) {
+        
+        // Handle CC-mapped KNOB parameters
+        // CC replaces the knob as base value (not modulation)
+        if (param.type == ParamType::KNOB && param.mapping.source == MappingSource::CC) {
+            float cc_value = cc_values[param.mapping.cc_number];
+            param.SetNormalizedWithHysteresis(cc_value, 0.001f);
+        }
+        // Handle CV-mapped KNOB parameters
+        else if (param.type == ParamType::KNOB && param.mapping.IsCVSource()) {
+            float cv_value = cv_inputs.GetFiltered(param.mapping.GetCVIndex());
+            
+            if (param.mapping.plugged) {
+                // Calculate CV signal for Plaits (raw signal without attenuverter)
+                float cv_signal = cv_value - param.mapping.offset;
+                
+                // Store CV signals for specific parameters that Plaits handles
+                // Transpose (index 5) -> frequency modulation
+                // Timbre (index 3) -> timbre modulation  
+                // Morph (index 4) -> morph modulation
+                if (i == 5) frequency_cv = cv_signal;
+                else if (i == 3) timbre_cv = cv_signal;
+                else if (i == 4) morph_cv = cv_signal;
+            }
+            
+            // For display purposes, still update param.value with the full calculation
             float mapped = CalculateMappedValue(param, param.value, cv_inputs);
             param.SetNormalizedWithHysteresis(mapped, 0.001f);
         } else if (param.type == ParamType::CV && param.mapping.IsCVSource()) {
             // CV type - direct read from CV input (no attenuverter emulation)
             float cv_value = cv_inputs.GetFiltered(param.mapping.GetCVIndex());
             param.SetNormalizedWithHysteresis(cv_value, 0.001f);
+        } else if (param.type == ParamType::ENUM && param.mapping.source == MappingSource::CC) {
+            // CC control for ENUM - quantized selection from CC value
+            float cc_value = cc_values[param.mapping.cc_number];
+            int index = static_cast<int>(cc_value * param.enum_count);
+            index = std::clamp(index, 0, static_cast<int>(param.enum_count) - 1);
+            param.SetIndex(index);
         } else if (param.type == ParamType::ENUM && param.mapping.IsCVSource()) {
             // CV control for ENUM - quantized selection
             int new_index = CalculateEnumFromCV(param, cv_inputs);
             param.SetIndex(new_index);
         }
     }
+    
+    // Pass CV modulation values to Plaits
+    plaits_module.SetCVModulations(frequency_cv, timbre_cv, morph_cv);
     
     // Process gate inputs for module
     bool gate1_state = hw.gate_input[0].State();
@@ -448,6 +491,11 @@ void ProcessMidi() {
         } else if (event.type == NoteOff) {
             NoteOffEvent note = event.AsNoteOff();
             plaits_module.NoteOff(note.note, note.velocity);
+        } else if (event.type == ControlChange) {
+            ControlChangeEvent cc = event.AsControlChange();
+            if (cc.control_number < 128) {
+                cc_values[cc.control_number] = cc.value / 127.0f;
+            }
         }
     }
 }

@@ -34,6 +34,9 @@ public:
     void ProcessGate(int gate_index, bool state) override;
     float GetCVOutput(int cv_index) override;
     
+    // Set CV modulation values (called from main before Process)
+    void SetCVModulations(float frequency_cv, float timbre_cv, float morph_cv);
+    
 private:
     // Plaits engine
     plaits::Voice* voice_;
@@ -41,13 +44,18 @@ private:
     plaits::Modulations* modulations_;
     stmlib::BufferAllocator* allocator_;
     
+    // CV modulation values from mapped inputs
+    float frequency_cv_;
+    float timbre_cv_;
+    float morph_cv_;
+    
     // Buffers
     static constexpr size_t kBlockSize = 24;
     static constexpr size_t kBufferSize = 32768;  // Buffer for Plaits engines
     uint8_t buffer_[kBufferSize];
     
     // Parameters
-    static constexpr int kNumParams = 9;  // Added Bank parameter
+    static constexpr int kNumParams = 9;  // Bank, Engine, Harmonics, Timbre, Morph, Transpose, LPG Color, LPG Decay, Level
     std::array<mutables_ui::Parameter, kNumParams> params_;
     
     // Bank and engine system

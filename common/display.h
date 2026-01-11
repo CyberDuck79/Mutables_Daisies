@@ -103,6 +103,7 @@ public:
         }
         
         // Item 3: Attenuverter
+        // Controls internal envelope modulation amount (works with both CV and CC mappings)
         snprintf(buffer, sizeof(buffer), "%+d%%", (int)(param.mapping.attenuverter * 100.0f));
         RenderSubmenuLine("Atten", buffer,
                          line, menu.submenu_selected_item == 3,
@@ -199,6 +200,7 @@ public:
         
         // Item 3: Attenuverter (only if CV or CC mapped)
         if (param.mapping.IsCVSource() || param.mapping.source == MappingSource::CC) {
+            // Controls internal envelope modulation amount
             snprintf(buffer, sizeof(buffer), "%+d%%", (int)(param.mapping.attenuverter * 100.0f));
             RenderSubmenuLine("Atten", buffer,
                              line, menu.submenu_selected_item == 3,

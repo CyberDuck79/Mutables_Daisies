@@ -76,6 +76,11 @@ void PlaitsPort::Init(float sample_rate) {
     modulations_ = new plaits::Modulations;
     allocator_ = new stmlib::BufferAllocator(buffer_, kBufferSize);
     
+    // Initialize CV modulation values
+    frequency_cv_ = 0.0f;
+    timbre_cv_ = 0.0f;
+    morph_cv_ = 0.0f;
+    
     // Initialize voice with buffer allocator
     voice_->Init(allocator_);
     
@@ -107,16 +112,33 @@ void PlaitsPort::SetupParameters() {
     params_[1] = mutables_ui::Parameter::Enum("Engine", synth_engine_names_, kNumSynthEngines);
     current_bank_ = 0;
     
-    // Main oscillator parameters (KNOB type) - no default mapping
+    // ==========================================================================
+    // PARAMETER ATTENUVERSION NOTES:
+    // Plaits has native attenuverter handling for: Transpose(FM), Timbre, Morph
+    // -> Their mapping.attenuverter maps directly to patch->*_modulation_amount
+    // -> CV signal is passed raw to Plaits which handles the math
+    //
+    // Parameters WITHOUT native attenuversion: Harmonics, LPG Color, LPG Decay
+    // -> We must compute attenuversion ourselves in main.cpp
+    // ==========================================================================
+    
+    // Harmonics - NO native attenuverter in Plaits, we handle it
     params_[2] = mutables_ui::Parameter::Knob("Harmonics", 0.0f, 1.0f, 0.5f);
+    
+    // Timbre - HAS native attenuverter (patch->timbre_modulation_amount)
     params_[3] = mutables_ui::Parameter::Knob("Timbre", 0.0f, 1.0f, 0.5f);
+    
+    // Morph - HAS native attenuverter (patch->morph_modulation_amount)
     params_[4] = mutables_ui::Parameter::Knob("Morph", 0.0f, 1.0f, 0.5f);
     
-    // Transpose: 0.5 = no transpose, 0.0 = -12 semitones, 1.0 = +12 semitones
+    // Transpose/FM - HAS native attenuverter (patch->frequency_modulation_amount)
+    // 0.5 = no transpose, 0.0 = -12 semitones, 1.0 = +12 semitones
     params_[5] = mutables_ui::Parameter::Knob("Transpose", 0.0f, 1.0f, 0.5f);
     
-    // LPG parameters
+    // LPG Color - NO native attenuverter, we handle it
     params_[6] = mutables_ui::Parameter::Knob("LPG Color", 0.0f, 1.0f, 0.5f);
+    
+    // LPG Decay - NO native attenuverter, we handle it
     params_[7] = mutables_ui::Parameter::Knob("LPG Decay", 0.0f, 1.0f, 0.5f);
     
     // Output level - CV input type (direct input, no attenuverter emulation)
@@ -168,21 +190,36 @@ void PlaitsPort::UpdatePatchFromParams() {
     patch_->engine = GetActualEngineIndex(bank, engine_in_bank);
     
     // MIDI note + transpose (0.5 = no transpose, 0.0 = -12, 1.0 = +12)
-    float transpose = (params_[5].value - 0.5f) * 24.0f;  // +-12 semitones
-    patch_->note = midi_note_ + transpose;
+    float transpose_semitones = (params_[5].value - 0.5f) * 24.0f;  // +-12 semitones
+    patch_->note = midi_note_ + transpose_semitones;
     
-    patch_->harmonics = params_[2].value;
-    patch_->timbre = params_[3].value;
-    patch_->morph = params_[4].value;
+    // For parameters with CV mapping: use offset as base value when plugged
+    // This lets Plaits add the CV modulation on top
+    auto& harmonics = params_[2];
+    auto& timbre = params_[3];
+    auto& morph = params_[4];
+    auto& transpose = params_[5];
     
-    // Modulation amounts (for internal envelope routing)
-    patch_->frequency_modulation_amount = 0.0f;
-    patch_->timbre_modulation_amount = 0.0f;
-    patch_->morph_modulation_amount = 0.0f;
+    patch_->harmonics = harmonics.mapping.plugged ? harmonics.mapping.offset : harmonics.value;
+    patch_->timbre = timbre.mapping.plugged ? timbre.mapping.offset : timbre.value;
+    patch_->morph = morph.mapping.plugged ? morph.mapping.offset : morph.value;
+    
+    // Modulation amounts - use the attenuverter from each parameter's mapping
+    // These control internal envelope routing (when unplugged) or external CV scaling (when plugged)
+    // CC mapping just replaces the base value, doesn't affect modulation
+    patch_->frequency_modulation_amount = transpose.mapping.attenuverter;
+    patch_->timbre_modulation_amount = timbre.mapping.attenuverter;
+    patch_->morph_modulation_amount = morph.mapping.attenuverter;
     
     // LPG parameters
     patch_->lpg_colour = params_[6].value;
     patch_->decay = params_[7].value;
+}
+
+void PlaitsPort::SetCVModulations(float frequency_cv, float timbre_cv, float morph_cv) {
+    frequency_cv_ = frequency_cv;
+    timbre_cv_ = timbre_cv;
+    morph_cv_ = morph_cv;
 }
 
 void PlaitsPort::Process(float** in, float** out, size_t size) {
@@ -203,11 +240,25 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         // Plaits does its own edge detection internally
         modulations_->trigger = active_gate ? 1.0f : 0.0f;
         modulations_->level = params_[8].value;
-        modulations_->frequency_patched = false;
-        modulations_->timbre_patched = false;
-        modulations_->morph_patched = false;
-        modulations_->trigger_patched = true;
-        modulations_->level_patched = false;
+        
+        // CV modulation values (set by main.cpp via SetCVModulations)
+        // For CC: the CC value is used directly as modulation (scaled 0-1)
+        modulations_->frequency = frequency_cv_;
+        modulations_->timbre = timbre_cv_;
+        modulations_->morph = morph_cv_;
+        
+        // Patched status - true only when CV is mapped+plugged
+        // This tells Plaits whether to use external modulation or internal envelope
+        // CC mapping just replaces base value, doesn't count as patched
+        auto& transpose = params_[5];
+        auto& timbre = params_[3];
+        auto& morph = params_[4];
+        
+        modulations_->frequency_patched = transpose.mapping.IsCVSource() && transpose.mapping.plugged;
+        modulations_->timbre_patched = timbre.mapping.IsCVSource() && timbre.mapping.plugged;
+        modulations_->morph_patched = morph.mapping.IsCVSource() && morph.mapping.plugged;
+        modulations_->trigger_patched = true;  // Always patched via MIDI/Gate
+        modulations_->level_patched = params_[8].mapping.IsCVSource();
         
         // Render audio
         voice_->Render(*patch_, *modulations_, frames, block_size);

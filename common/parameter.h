@@ -61,7 +61,7 @@ struct MappingConfig {
         , cc_number(1)
         , plugged(false)
         , offset(0.5f)
-        , attenuverter(1.0f)
+        , attenuverter(0.0f)  // Default 0% (12 o'clock - no modulation)
         , velocity_amount(0.0f)
         , trigger(TriggerMode::RISE)
         , action(EnumAction::INCREMENT)
