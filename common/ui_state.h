@@ -12,27 +12,27 @@ enum class UIState {
     SubmenuEdit     // Editing submenu values
 };
 
-// Submenu items for KNOB type
+// Submenu items for KNOB type (no Back - long press to exit)
 enum class KnobSubmenuItem {
-    Mapping,        // Select source: None, CV1-4, CC1-127
-    Plugged,        // Toggle + captures offset when enabled
+    Mapping,        // Select source: None, CV1-4, CC
+    CCNumber,       // CC number 1-127 (only if CC mapped)
+    Plugged,        // Toggle + captures offset when enabled (only if CV mapped)
     Attenuverter,   // -100% to +100%
-    Velocity,       // -100% to +100%
-    Back
+    Velocity        // -100% to +100%
 };
 
-// Submenu items for CV type
+// Submenu items for CV type (no Back - long press to exit)
 enum class CVSubmenuItem {
-    Mapping,        // Select source: None, CV1-4
-    Back
+    Mapping         // Select source: None, CV1-4
 };
 
-// Submenu items for ENUM type
+// Submenu items for ENUM type (no Back - long press to exit)
 enum class EnumSubmenuItem {
-    Mapping,        // Select source: None, Gate1-2, CV1-4, CC1-127
-    Trigger,        // rise, fall, rise & fall (only if Gate mapped)
-    Action,         // ++, --, +-, -+ (only if Gate mapped)
-    Back
+    Mapping,        // Select source: None, Gate1-2, CV1-4, CC
+    CCNumber,       // CC number 1-127 (only if CC mapped)
+    Attenuverter,   // -100% to +100% (only if CV or CC mapped)
+    Trigger,        // rise, fall, both (only if Gate mapped)
+    Action          // ++, -- (always), +-, -+ (only if trigger=both)
 };
 
 struct MenuState {
@@ -98,26 +98,41 @@ struct MenuState {
     int GetSubmenuItemCount(ParamType type, const MappingConfig& mapping) const {
         switch (type) {
             case ParamType::KNOB:
-                return 5;  // Mapping, Plugged, Attenuverter, Velocity, Back
+                return 5;  // Mapping, CCNumber, Plugged, Attenuverter, Velocity
             case ParamType::CV:
-                return 2;  // Mapping, Back
+                return 1;  // Mapping only
             case ParamType::ENUM:
-                if (mapping.IsGateSource()) {
-                    return 4;  // Mapping, Trigger, Action, Back
-                }
-                return 2;  // Mapping, Back
+                return 5;  // Mapping, CCNumber, Attenuverter, Trigger, Action
             default:
-                return 1;  // Back only
+                return 0;
         }
     }
     
     // Check if submenu item is visible based on parameter state
     bool IsSubmenuItemVisible(ParamType type, int item_index, const MappingConfig& mapping) const {
-        if (type == ParamType::ENUM) {
-            // Trigger and Action only visible if Gate mapped
-            if (item_index == 1 || item_index == 2) {
-                return mapping.IsGateSource();
-            }
+        if (type == ParamType::KNOB) {
+            // CCNumber only visible if CC mapped
+            if (item_index == 1) return mapping.source == MappingSource::CC;
+            // Plugged only visible if CV mapped
+            if (item_index == 2) return mapping.IsCVSource();
+        } else if (type == ParamType::ENUM) {
+            // CCNumber only visible if CC mapped
+            if (item_index == 1) return mapping.source == MappingSource::CC;
+            // Attenuverter only visible if CV or CC mapped
+            if (item_index == 2) return mapping.IsCVSource() || mapping.source == MappingSource::CC;
+            // Trigger only visible if Gate mapped
+            if (item_index == 3) return mapping.IsGateSource();
+            // Action only visible if Gate mapped
+            if (item_index == 4) return mapping.IsGateSource();
+        }
+        return true;
+    }
+    
+    // Check if action value is valid for current trigger mode
+    bool IsActionValidForTrigger(EnumAction action, TriggerMode trigger) const {
+        // +- and -+ only make sense with RISE_AND_FALL trigger
+        if (action == EnumAction::TOGGLE_PLUS || action == EnumAction::TOGGLE_MINUS) {
+            return trigger == TriggerMode::RISE_AND_FALL;
         }
         return true;
     }

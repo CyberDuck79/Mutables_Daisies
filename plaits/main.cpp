@@ -56,6 +56,81 @@ float CalculateMappedValue(const mutables_ui::Parameter& param, float base_value
     return base_value;
 }
 
+// Calculate ENUM index from CV value with attenuverter
+int CalculateEnumFromCV(const mutables_ui::Parameter& param, const CVInputBank& cv_inputs) {
+    const MappingConfig& m = param.mapping;
+    
+    if (!m.IsCVSource()) return param.GetIndex();
+    
+    float cv_value = cv_inputs.GetFiltered(m.GetCVIndex());
+    
+    // Apply attenuverter (centered at 0.5)
+    float scaled = 0.5f + (cv_value - 0.5f) * m.attenuverter;
+    scaled = std::clamp(scaled, 0.0f, 1.0f);
+    
+    // Quantize to enum count
+    int index = static_cast<int>(scaled * param.enum_count);
+    return std::clamp(index, 0, static_cast<int>(param.enum_count) - 1);
+}
+
+// Process gate trigger for ENUM parameters
+void ProcessEnumGate(mutables_ui::Parameter& param, bool gate_state) {
+    MappingConfig& m = param.mapping;
+    
+    if (!m.IsGateSource()) return;
+    
+    bool trigger = false;
+    
+    // Edge detection based on trigger mode
+    switch (m.trigger) {
+        case TriggerMode::RISE:
+            trigger = gate_state && !m.last_gate_state;
+            break;
+        case TriggerMode::FALL:
+            trigger = !gate_state && m.last_gate_state;
+            break;
+        case TriggerMode::RISE_AND_FALL:
+            trigger = gate_state != m.last_gate_state;
+            break;
+    }
+    
+    m.last_gate_state = gate_state;
+    
+    if (trigger) {
+        int current = param.GetIndex();
+        int max_val = static_cast<int>(param.max);
+        
+        switch (m.action) {
+            case EnumAction::INCREMENT:
+                current = (current + 1) > max_val ? 0 : current + 1;
+                break;
+            case EnumAction::DECREMENT:
+                current = (current - 1) < 0 ? max_val : current - 1;
+                break;
+            case EnumAction::TOGGLE_PLUS:
+                // +- : increment on first edge, decrement on second
+                if (m.toggle_state) {
+                    current = (current - 1) < 0 ? max_val : current - 1;
+                } else {
+                    current = (current + 1) > max_val ? 0 : current + 1;
+                }
+                m.toggle_state = !m.toggle_state;
+                break;
+            case EnumAction::TOGGLE_MINUS:
+                // -+ : decrement on first edge, increment on second
+                if (m.toggle_state) {
+                    current = (current + 1) > max_val ? 0 : current + 1;
+                } else {
+                    current = (current - 1) < 0 ? max_val : current - 1;
+                }
+                m.toggle_state = !m.toggle_state;
+                break;
+        }
+        
+        param.SetIndex(current);
+    }
+}
+
 void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size) {
     // Update CV inputs
     float cv1 = hw.GetKnobValue(DaisyPatch::CTRL_1);
@@ -78,11 +153,26 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
         if (param.type == ParamType::KNOB && param.mapping.IsCVSource()) {
             float mapped = CalculateMappedValue(param, param.value, cv_inputs);
             param.SetNormalizedWithHysteresis(mapped, 0.001f);
+        } else if (param.type == ParamType::ENUM && param.mapping.IsCVSource()) {
+            // CV control for ENUM - quantized selection
+            int new_index = CalculateEnumFromCV(param, cv_inputs);
+            param.SetIndex(new_index);
         }
     }
     
-    // Process gate inputs
-    plaits_module.ProcessGate(0, hw.gate_input[0].State());
+    // Process gate inputs for module
+    bool gate1_state = hw.gate_input[0].State();
+    bool gate2_state = hw.gate_input[1].State();
+    plaits_module.ProcessGate(0, gate1_state);
+    
+    // Process gate triggers for ENUM parameters
+    for (size_t i = 0; i < param_count; i++) {
+        auto& param = params[i];
+        if (param.type == ParamType::ENUM && param.mapping.IsGateSource()) {
+            bool gate_state = (param.mapping.source == MappingSource::GATE1) ? gate1_state : gate2_state;
+            ProcessEnumGate(param, gate_state);
+        }
+    }
     
     // Setup audio pointers
     for (size_t i = 0; i < 4; i++) {
@@ -216,22 +306,20 @@ void UpdateEncoder() {
             
             if (short_press) {
                 int item = menu.submenu_selected_item;
-                int item_count = menu.GetSubmenuItemCount(param.type, param.mapping);
                 
-                // Check if it's the Back item (last item)
-                if (item == item_count - 1) {
-                    menu.ExitSubmenu();
-                } else if (param.type == ParamType::KNOB && item == 1) {
-                    // Plugged toggle - special handling
-                    if (param.mapping.IsCVSource()) {
+                if (param.type == ParamType::KNOB) {
+                    if (item == 2 && param.mapping.IsCVSource()) {
+                        // Plugged toggle - special handling
                         param.mapping.plugged = !param.mapping.plugged;
                         if (param.mapping.plugged) {
-                            // Capture current knob value as offset
                             int cv_idx = param.mapping.GetCVIndex();
                             if (cv_idx >= 0) {
                                 param.mapping.offset = cv_inputs.GetFiltered(cv_idx);
                             }
                         }
+                    } else {
+                        // Enter edit mode for other items
+                        menu.state = UIState::SubmenuEdit;
                     }
                 } else {
                     // Enter edit mode for this item
@@ -255,11 +343,17 @@ void UpdateEncoder() {
                         case 0:  // Mapping
                             CycleMappingSource(param, encoder_increment);
                             break;
-                        case 2:  // Attenuverter
+                        case 1:  // CC Number (if CC mapped)
+                            if (param.mapping.source == MappingSource::CC) {
+                                param.mapping.cc_number += encoder_increment;
+                                param.mapping.cc_number = std::clamp(param.mapping.cc_number, 1, 127);
+                            }
+                            break;
+                        case 3:  // Attenuverter
                             param.mapping.attenuverter += encoder_increment * 0.05f;
                             param.mapping.attenuverter = std::clamp(param.mapping.attenuverter, -1.0f, 1.0f);
                             break;
-                        case 3:  // Velocity
+                        case 4:  // Velocity
                             param.mapping.velocity_amount += encoder_increment * 0.05f;
                             param.mapping.velocity_amount = std::clamp(param.mapping.velocity_amount, -1.0f, 1.0f);
                             break;
@@ -273,17 +367,34 @@ void UpdateEncoder() {
                         case 0:  // Mapping
                             CycleMappingSource(param, encoder_increment);
                             break;
-                        case 1:  // Trigger (if Gate mapped)
+                        case 1:  // CC Number (if CC mapped)
+                            if (param.mapping.source == MappingSource::CC) {
+                                param.mapping.cc_number += encoder_increment;
+                                param.mapping.cc_number = std::clamp(param.mapping.cc_number, 1, 127);
+                            }
+                            break;
+                        case 2:  // Attenuverter (if CV or CC mapped)
+                            if (param.mapping.IsCVSource() || param.mapping.source == MappingSource::CC) {
+                                param.mapping.attenuverter += encoder_increment * 0.05f;
+                                param.mapping.attenuverter = std::clamp(param.mapping.attenuverter, -1.0f, 1.0f);
+                            }
+                            break;
+                        case 3:  // Trigger (if Gate mapped)
                             if (param.mapping.IsGateSource()) {
                                 int t = static_cast<int>(param.mapping.trigger) + encoder_increment;
                                 t = std::clamp(t, 0, 2);
                                 param.mapping.trigger = static_cast<TriggerMode>(t);
+                                // Reset action if now invalid
+                                if (!menu.IsActionValidForTrigger(param.mapping.action, param.mapping.trigger)) {
+                                    param.mapping.action = EnumAction::INCREMENT;
+                                }
                             }
                             break;
-                        case 2:  // Action (if Gate mapped)
+                        case 4:  // Action (if Gate mapped)
                             if (param.mapping.IsGateSource()) {
+                                int max_action = (param.mapping.trigger == TriggerMode::RISE_AND_FALL) ? 3 : 1;
                                 int a = static_cast<int>(param.mapping.action) + encoder_increment;
-                                a = std::clamp(a, 0, 3);
+                                a = std::clamp(a, 0, max_action);
                                 param.mapping.action = static_cast<EnumAction>(a);
                             }
                             break;

@@ -66,40 +66,46 @@ public:
         hw_->display.WriteString(buffer, Font_7x10, true);
         
         int line = 14;
-        int item_index = 0;
+        int visual_index = 0;  // For display positioning
         
-        // Mapping
+        // Item 0: Mapping
         RenderSubmenuLine("Map", GetMappingSourceName(param.mapping.source, param.mapping.cc_number),
-                         line, menu.submenu_selected_item == item_index,
-                         menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == item_index);
+                         line, menu.submenu_selected_item == 0,
+                         menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 0);
         line += 13;
-        item_index++;
+        visual_index++;
         
-        // Plugged (only if CV mapped, not CC)
+        // Item 1: CC Number (only if CC mapped)
+        if (param.mapping.source == MappingSource::CC) {
+            snprintf(buffer, sizeof(buffer), "%d", param.mapping.cc_number);
+            RenderSubmenuLine("CC#", buffer,
+                             line, menu.submenu_selected_item == 1,
+                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 1);
+            line += 13;
+            visual_index++;
+        }
+        
+        // Item 2: Plugged (only if CV mapped)
         if (param.mapping.IsCVSource()) {
             RenderSubmenuLine("Plugged", param.mapping.plugged ? "ON" : "OFF",
-                             line, menu.submenu_selected_item == item_index,
-                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == item_index);
-        } else {
-            RenderSubmenuLine("Plugged", "-",
-                             line, menu.submenu_selected_item == item_index, false);
+                             line, menu.submenu_selected_item == 2,
+                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 2);
+            line += 13;
+            visual_index++;
         }
-        line += 13;
-        item_index++;
         
-        // Attenuverter
+        // Item 3: Attenuverter
         snprintf(buffer, sizeof(buffer), "%+d%%", (int)(param.mapping.attenuverter * 100.0f));
         RenderSubmenuLine("Atten", buffer,
-                         line, menu.submenu_selected_item == item_index,
-                         menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == item_index);
+                         line, menu.submenu_selected_item == 3,
+                         menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 3);
         line += 13;
-        item_index++;
         
-        // Velocity
+        // Item 4: Velocity
         snprintf(buffer, sizeof(buffer), "%+d%%", (int)(param.mapping.velocity_amount * 100.0f));
         RenderSubmenuLine("Velocity", buffer,
-                         line, menu.submenu_selected_item == item_index,
-                         menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == item_index);
+                         line, menu.submenu_selected_item == 4,
+                         menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 4);
         
         hw_->display.Update();
     }
@@ -126,10 +132,6 @@ public:
                          14, menu.submenu_selected_item == 0,
                          menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 0);
         
-        // Back
-        RenderSubmenuLine("Back", "",
-                         27, menu.submenu_selected_item == 1, false);
-        
         hw_->display.Update();
     }
     
@@ -145,37 +147,55 @@ public:
         hw_->display.WriteString(buffer, Font_7x10, true);
         
         int line = 14;
-        int item_index = 0;
         
-        // Mapping
+        // Item 0: Mapping
         RenderSubmenuLine("Map", GetMappingSourceName(param.mapping.source, param.mapping.cc_number),
-                         line, menu.submenu_selected_item == item_index,
-                         menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == item_index);
+                         line, menu.submenu_selected_item == 0,
+                         menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 0);
         line += 13;
-        item_index++;
         
-        // Trigger and Action only if Gate mapped
-        if (param.mapping.IsGateSource()) {
-            // Trigger
-            static const char* trigger_names[] = {"Rise", "Fall", "Both"};
-            RenderSubmenuLine("Trigger", trigger_names[static_cast<int>(param.mapping.trigger)],
-                             line, menu.submenu_selected_item == item_index,
-                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == item_index);
+        // Item 1: CC Number (only if CC mapped)
+        if (param.mapping.source == MappingSource::CC) {
+            snprintf(buffer, sizeof(buffer), "%d", param.mapping.cc_number);
+            RenderSubmenuLine("CC#", buffer,
+                             line, menu.submenu_selected_item == 1,
+                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 1);
             line += 13;
-            item_index++;
-            
-            // Action
-            static const char* action_names[] = {"++", "--", "+-", "-+"};
-            RenderSubmenuLine("Action", action_names[static_cast<int>(param.mapping.action)],
-                             line, menu.submenu_selected_item == item_index,
-                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == item_index);
-            line += 13;
-            item_index++;
         }
         
-        // Back
-        RenderSubmenuLine("Back", "",
-                         line, menu.submenu_selected_item == item_index, false);
+        // Item 2: Attenuverter (only if CV or CC mapped)
+        if (param.mapping.IsCVSource() || param.mapping.source == MappingSource::CC) {
+            snprintf(buffer, sizeof(buffer), "%+d%%", (int)(param.mapping.attenuverter * 100.0f));
+            RenderSubmenuLine("Atten", buffer,
+                             line, menu.submenu_selected_item == 2,
+                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 2);
+            line += 13;
+        }
+        
+        // Gate-specific items
+        if (param.mapping.IsGateSource()) {
+            // Item 3: Trigger
+            static const char* trigger_names[] = {"Rise", "Fall", "Both"};
+            RenderSubmenuLine("Trigger", trigger_names[static_cast<int>(param.mapping.trigger)],
+                             line, menu.submenu_selected_item == 3,
+                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 3);
+            line += 13;
+            
+            // Item 4: Action - show valid actions based on trigger mode
+            const char* action_str;
+            if (param.mapping.trigger == TriggerMode::RISE_AND_FALL) {
+                static const char* action_names_both[] = {"++", "--", "+-", "-+"};
+                action_str = action_names_both[static_cast<int>(param.mapping.action)];
+            } else {
+                static const char* action_names_single[] = {"++", "--"};
+                int action_idx = static_cast<int>(param.mapping.action);
+                if (action_idx > 1) action_idx = 0;  // Clamp to valid
+                action_str = action_names_single[action_idx];
+            }
+            RenderSubmenuLine("Action", action_str,
+                             line, menu.submenu_selected_item == 4,
+                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 4);
+        }
         
         hw_->display.Update();
     }
@@ -298,32 +318,16 @@ private:
     void RenderMappingIndicator(const Parameter& param, int y, int x) {
         if (param.mapping.source == MappingSource::NONE) return;
         
-        char indicator[4] = {0};
+        // Use simple '*' indicator to avoid overflow with long values
+        // Position at fixed location before submenu indicator
+        int indicator_x = 114;  // Fixed position, leaves room for '>'
         
-        if (param.mapping.IsCVSource()) {
-            // [1]-[4] for CV
-            indicator[0] = '1' + param.mapping.GetCVIndex();
-        } else if (param.mapping.IsGateSource()) {
-            // G1 or G2 for Gate
-            indicator[0] = 'G';
-            indicator[1] = '1' + param.mapping.GetGateIndex();
-        } else if (param.mapping.source == MappingSource::CC) {
-            // # for CC
-            indicator[0] = '#';
-        }
+        hw_->display.DrawLine(indicator_x, y + 1, indicator_x + 6, y + 1, true);
+        hw_->display.DrawLine(indicator_x, y + 12, indicator_x + 6, y + 12, true);
+        hw_->display.DrawRect(indicator_x, y + 2, 7, 10, true, true);
         
-        if (indicator[0]) {
-            int ind_len = strlen(indicator);
-            int ind_width = ind_len * 7;
-            
-            // Draw box around indicator
-            hw_->display.DrawLine(x, y + 1, x + ind_width - 1, y + 1, true);
-            hw_->display.DrawLine(x, y + 12, x + ind_width - 1, y + 12, true);
-            hw_->display.DrawRect(x, y + 2, ind_width, 10, true, true);
-            
-            hw_->display.SetCursor(x, y + 2);
-            hw_->display.WriteString(indicator, Font_7x10, false);
-        }
+        hw_->display.SetCursor(indicator_x, y + 2);
+        hw_->display.WriteString("*", Font_7x10, false);
     }
     
     void FormatValue(const Parameter& param, char* buffer, size_t size) {
