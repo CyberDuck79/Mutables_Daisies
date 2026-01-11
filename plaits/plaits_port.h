@@ -55,7 +55,7 @@ private:
     uint8_t buffer_[kBufferSize];
     
     // Parameters
-    static constexpr int kNumParams = 10;  // Bank, Engine, Harmonics, Timbre, Morph, Frequency, LPG Color, LPG Decay, Level, Freq Range
+    static constexpr int kNumParams = 12;  // Bank, Engine, Freq.Rng, Frequency, Harmonics, Timbre, Morph, Level, LPG Color, LPG Decay, Volume, MIDI Ch
     std::array<mutables_ui::Parameter, kNumParams> params_;
     
     // Bank and engine system
@@ -64,11 +64,13 @@ private:
     static const char* drum_engine_names_[];
     static const char* new_engine_names_[];
     static const char* freq_range_names_[];
+    static const char* midi_channel_names_[];
     static constexpr int kNumBanks = 3;
     static constexpr int kNumSynthEngines = 8;
     static constexpr int kNumDrumEngines = 8;
     static constexpr int kNumNewEngines = 8;
     static constexpr int kNumFreqRanges = 10;  // C0-C8 + full range
+    static constexpr int kNumMidiChannels = 17;  // Omni + 1-16
     
     int current_bank_;
     
@@ -92,6 +94,9 @@ public:
     void NoteOn(uint8_t note, uint8_t velocity);
     void NoteOff(uint8_t note, uint8_t velocity);
     float GetVelocity() const { return midi_velocity_; }
+    
+    // Get MIDI channel setting: 0 = Omni (all), 1-16 = specific channel
+    int GetMidiChannel() const { return params_[11].GetIndex(); }
 };
 
 } // namespace mutables_plaits

@@ -115,8 +115,8 @@ struct MenuState {
             if (item_index == 1) return mapping.source == MappingSource::CC;
             // Plugged only visible if CV mapped
             if (item_index == 2) return mapping.IsCVSource();
-            // Velocity hidden for Frequency parameter (index 5) - not useful for pitch
-            if (item_index == 4 && submenu_param_index == 5) return false;
+            // Velocity hidden for Frequency parameter (index 3) - not useful for pitch
+            if (item_index == 4 && submenu_param_index == 3) return false;
         } else if (type == ParamType::CV) {
             // Plugged only visible if CV mapped
             if (item_index == 1) return mapping.IsCVSource();

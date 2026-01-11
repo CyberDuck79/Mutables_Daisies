@@ -25,6 +25,13 @@ const char* PlaitsPort::freq_range_names_[] = {
     "C0-C8"    // 9: Full 8-octave range
 };
 
+// MIDI channel names (Omni = all channels, then 1-16)
+const char* PlaitsPort::midi_channel_names_[] = {
+    "Omni",    // 0: Listen to all channels
+    "1", "2", "3", "4", "5", "6", "7", "8",
+    "9", "10", "11", "12", "13", "14", "15", "16"
+};
+
 // Synth engines (indices 8-15 in Plaits)
 const char* PlaitsPort::synth_engine_names_[] = {
     "VA",        // 8: Virtual analog
@@ -128,43 +135,45 @@ void PlaitsPort::SetupParameters() {
     current_bank_ = 0;
     
     // ==========================================================================
-    // PARAMETER ATTENUVERSION NOTES:
-    // Plaits has native attenuverter handling for: Transpose(FM), Timbre, Morph
-    // -> Their mapping.attenuverter maps directly to patch->*_modulation_amount
-    // -> CV signal is passed raw to Plaits which handles the math
-    //
-    // Parameters WITHOUT native attenuversion: Harmonics, LPG Color, LPG Decay
-    // -> We must compute attenuversion ourselves in main.cpp
+    // PARAMETER ORDER: Matches original Plaits knob layout
+    // MODEL (Bank/Engine) -> FREQUENCY -> HARMONICS -> TIMBRE -> MORPH
     // ==========================================================================
-    
-    // Harmonics - NO native attenuverter in Plaits, we handle it
-    params_[2] = mutables_ui::Parameter::Knob("Harmonics", 0.0f, 1.0f, 0.5f);
-    
-    // Timbre - HAS native attenuverter (patch->timbre_modulation_amount)
-    params_[3] = mutables_ui::Parameter::Knob("Timbre", 0.0f, 1.0f, 0.5f);
-    
-    // Morph - HAS native attenuverter (patch->morph_modulation_amount)
-    params_[4] = mutables_ui::Parameter::Knob("Morph", 0.0f, 1.0f, 0.5f);
-    
-    // Transpose/FM - HAS native attenuverter (patch->frequency_modulation_amount)
-    // Now controlled by Freq. Rng + Frequency knob
-    params_[5] = mutables_ui::Parameter::Knob("Frequency", 0.0f, 1.0f, 0.5f);
     
     // Frequency Range - selects octave range for the Frequency knob
     // C0-C8: individual octaves with ±7 semitone fine tuning
     // C0-C8 (full): full 8-octave range
-    params_[9] = mutables_ui::Parameter::Enum("Freq. Rng", freq_range_names_, kNumFreqRanges);
-    params_[9].SetIndex(4);  // Default to C4 (middle C)
+    params_[2] = mutables_ui::Parameter::Enum("Freq. Rng", freq_range_names_, kNumFreqRanges);
+    params_[2].SetIndex(4);  // Default to C4 (middle C)
     
-    // LPG Color - NO native attenuverter, we handle it
-    params_[6] = mutables_ui::Parameter::Knob("LPG Color", 0.0f, 1.0f, 0.5f);
+    // Frequency - HAS native attenuverter (patch->frequency_modulation_amount)
+    params_[3] = mutables_ui::Parameter::Knob("Frequency", 0.0f, 1.0f, 0.5f);
     
-    // LPG Decay - NO native attenuverter, we handle it
-    params_[7] = mutables_ui::Parameter::Knob("LPG Decay", 0.0f, 1.0f, 0.5f);
+    // Harmonics - NO native attenuverter in Plaits, we handle it
+    params_[4] = mutables_ui::Parameter::Knob("Harmonics", 0.0f, 1.0f, 0.5f);
+    
+    // Timbre - HAS native attenuverter (patch->timbre_modulation_amount)
+    params_[5] = mutables_ui::Parameter::Knob("Timbre", 0.0f, 1.0f, 0.5f);
+    
+    // Morph - HAS native attenuverter (patch->morph_modulation_amount)
+    params_[6] = mutables_ui::Parameter::Knob("Morph", 0.0f, 1.0f, 0.5f);
     
     // Output level - CV input type (direct input, no attenuverter emulation)
-    params_[8] = mutables_ui::Parameter::CV("Level");
-    params_[8].value = 0.8f;  // Default level
+    params_[7] = mutables_ui::Parameter::CV("Level");
+    params_[7].value = 0.8f;  // Default level
+    
+    // LPG Color - NO native attenuverter, we handle it
+    params_[8] = mutables_ui::Parameter::Knob("LPG Color", 0.0f, 1.0f, 0.5f);
+    
+    // LPG Decay - NO native attenuverter, we handle it
+    params_[9] = mutables_ui::Parameter::Knob("LPG Decay", 0.0f, 1.0f, 0.5f);
+    
+    // Volume - scales output level (1.0 = full, useful for eurorack compatibility)
+    // Can add velocity mod for standard velocity->volume behavior
+    params_[10] = mutables_ui::Parameter::Knob("Volume", 0.0f, 1.0f, 1.0f);  // Default to full
+    
+    // MIDI Channel - Omni (all) or specific channel 1-16
+    params_[11] = mutables_ui::Parameter::Enum("MIDI Ch", midi_channel_names_, kNumMidiChannels);
+    params_[11].SetIndex(0);  // Default to Omni
 }
 
 void PlaitsPort::UpdateEngineListForBank(int bank) {
@@ -223,8 +232,8 @@ void PlaitsPort::UpdatePatchFromParams() {
     // - MIDI note acts as V/Oct: added to base note as offset from C4 (note 60)
     // ==========================================================================
     
-    int freq_range = params_[9].GetIndex();  // 0-8 = C0-C8, 9 = full range
-    float frequency_knob = params_[5].value;
+    int freq_range = params_[2].GetIndex();  // 0-8 = C0-C8, 9 = full range
+    float frequency_knob = params_[3].value;
     
     float base_note;
     if (freq_range == 9) {
@@ -247,18 +256,18 @@ void PlaitsPort::UpdatePatchFromParams() {
     
     // For parameters with CV mapping: use offset as base value when plugged
     // This lets Plaits add the CV modulation on top
-    auto& harmonics = params_[2];
-    auto& timbre = params_[3];
-    auto& morph = params_[4];
-    auto& frequency = params_[5];
+    auto& harmonics = params_[4];
+    auto& timbre = params_[5];
+    auto& morph = params_[6];
+    auto& frequency = params_[3];
     
     // Apply velocity modulation: vel_mod = velocity * velocity_amount
     // This is applied when USING values, not when storing them (to avoid feedback)
     float harm_vel = midi_velocity_ * harmonics.mapping.velocity_amount;
     float timb_vel = midi_velocity_ * timbre.mapping.velocity_amount;
     float morph_vel = midi_velocity_ * morph.mapping.velocity_amount;
-    float lpg_col_vel = midi_velocity_ * params_[6].mapping.velocity_amount;
-    float lpg_dec_vel = midi_velocity_ * params_[7].mapping.velocity_amount;
+    float lpg_col_vel = midi_velocity_ * params_[8].mapping.velocity_amount;
+    float lpg_dec_vel = midi_velocity_ * params_[9].mapping.velocity_amount;
     
     float harm_base = harmonics.mapping.plugged ? harmonics.mapping.offset : harmonics.value;
     float timb_base = timbre.mapping.plugged ? timbre.mapping.offset : timbre.value;
@@ -276,8 +285,8 @@ void PlaitsPort::UpdatePatchFromParams() {
     patch_->morph_modulation_amount = morph.mapping.attenuverter;
     
     // LPG parameters with velocity modulation
-    patch_->lpg_colour = std::clamp(params_[6].value + lpg_col_vel, 0.0f, 1.0f);
-    patch_->decay = std::clamp(params_[7].value + lpg_dec_vel, 0.0f, 1.0f);
+    patch_->lpg_colour = std::clamp(params_[8].value + lpg_col_vel, 0.0f, 1.0f);
+    patch_->decay = std::clamp(params_[9].value + lpg_dec_vel, 0.0f, 1.0f);
 }
 
 void PlaitsPort::SetCVModulations(float frequency_cv, float timbre_cv, float morph_cv) {
@@ -303,7 +312,7 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         // Set modulations - keep trigger high while gate is active
         // Plaits does its own edge detection internally
         modulations_->trigger = active_gate ? 1.0f : 0.0f;
-        modulations_->level = params_[8].value;
+        modulations_->level = params_[7].value;
         
         // CV modulation values (set by main.cpp via SetCVModulations)
         // For CC: the CC value is used directly as modulation (scaled 0-1)
@@ -314,23 +323,32 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         // Patched status - true only when CV is mapped+plugged
         // This tells Plaits whether to use external modulation or internal envelope
         // CC mapping just replaces base value, doesn't count as patched
-        auto& frequency = params_[5];
-        auto& timbre = params_[3];
-        auto& morph = params_[4];
+        auto& frequency = params_[3];
+        auto& timbre = params_[5];
+        auto& morph = params_[6];
         
         modulations_->frequency_patched = frequency.mapping.IsCVSource() && frequency.mapping.plugged;
         modulations_->timbre_patched = timbre.mapping.IsCVSource() && timbre.mapping.plugged;
         modulations_->morph_patched = morph.mapping.IsCVSource() && morph.mapping.plugged;
         modulations_->trigger_patched = true;  // Always patched via MIDI/Gate
-        modulations_->level_patched = params_[8].mapping.IsCVSource();
+        modulations_->level_patched = params_[7].mapping.IsCVSource();
         
         // Render audio
         voice_->Render(*patch_, *modulations_, frames, block_size);
         
-        // Convert from short to float and copy to output
+        // Get volume with velocity modulation
+        float vol_vel = midi_velocity_ * params_[10].mapping.velocity_amount;
+        float volume = std::clamp(params_[10].value + vol_vel, 0.0f, 1.0f);
+        
+        // Convert from short to float, apply volume, and copy to outputs
+        // OUT -> channels 1 & 3, AUX -> channels 2 & 4
         for (size_t j = 0; j < block_size && (i + j) < size; j++) {
-            out[0][i + j] = static_cast<float>(frames[j].out) / 32768.0f;
-            out[1][i + j] = static_cast<float>(frames[j].aux) / 32768.0f;
+            float out_sample = (static_cast<float>(frames[j].out) / 32768.0f) * volume;
+            float aux_sample = (static_cast<float>(frames[j].aux) / 32768.0f) * volume;
+            out[0][i + j] = out_sample;  // OUT -> channel 1
+            out[1][i + j] = aux_sample;  // AUX -> channel 2
+            out[2][i + j] = out_sample;  // OUT -> channel 3
+            out[3][i + j] = aux_sample;  // AUX -> channel 4
         }
     }
 }

@@ -30,6 +30,12 @@ const uint32_t LONG_PRESS_MS = 500;
 // CC values storage (0.0 to 1.0)
 float cc_values[128] = {0.0f};
 
+// Sample-and-hold for Bank/Engine CV mapping
+// When CV mapped with plugged=true, value is sampled on NoteOn
+int bank_held_index = 0;
+int engine_held_index = 0;
+bool sample_hold_pending = false;  // Flag set on NoteOn to trigger sampling
+
 // Audio buffers
 float* audio_in[4];
 float* audio_out[4];
@@ -183,12 +189,12 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
                 float cv_signal = cv_value - param.mapping.offset;
                 
                 // Store CV signals for specific parameters that Plaits handles
-                // Frequency (index 5) -> frequency modulation
-                // Timbre (index 3) -> timbre modulation  
-                // Morph (index 4) -> morph modulation
-                if (i == 5) frequency_cv = cv_signal;
-                else if (i == 3) timbre_cv = cv_signal;
-                else if (i == 4) morph_cv = cv_signal;
+                // Frequency (index 3) -> frequency modulation
+                // Timbre (index 5) -> timbre modulation  
+                // Morph (index 6) -> morph modulation
+                if (i == 3) frequency_cv = cv_signal;
+                else if (i == 5) timbre_cv = cv_signal;
+                else if (i == 6) morph_cv = cv_signal;
             }
             
             // For display purposes, still update param.value with the full calculation
@@ -211,11 +217,29 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
             index = std::clamp(index, 0, static_cast<int>(param.enum_count) - 1);
             param.SetIndex(index);
         } else if (param.type == ParamType::ENUM && param.mapping.IsCVSource()) {
-            // CV control for ENUM - quantized selection
-            int new_index = CalculateEnumFromCV(param, cv_inputs);
-            param.SetIndex(new_index);
+            // Bank (i=0) and Engine (i=1): Sample-and-hold on NoteOn when plugged
+            // Other ENUMs: continuous CV control
+            if ((i == 0 || i == 1) && param.mapping.plugged) {
+                // Sample on NoteOn, otherwise use held value
+                if (sample_hold_pending) {
+                    int new_index = CalculateEnumFromCV(param, cv_inputs);
+                    if (i == 0) bank_held_index = new_index;
+                    else engine_held_index = new_index;
+                    param.SetIndex(new_index);
+                } else {
+                    // Use held value
+                    param.SetIndex(i == 0 ? bank_held_index : engine_held_index);
+                }
+            } else {
+                // Normal continuous CV control for other ENUMs or unplugged Bank/Engine
+                int new_index = CalculateEnumFromCV(param, cv_inputs);
+                param.SetIndex(new_index);
+            }
         }
     }
+    
+    // Clear sample-and-hold pending flag after processing
+    sample_hold_pending = false;
     
     // Pass CV modulation values to Plaits
     plaits_module.SetCVModulations(frequency_cv, timbre_cv, morph_cv);
@@ -487,9 +511,36 @@ void ProcessMidi() {
     while (hw.midi.HasEvents()) {
         MidiEvent event = hw.midi.PopEvent();
         
+        // MIDI Thru: Forward all events to output regardless of channel
+        // Reconstruct raw MIDI bytes and send
+        if (event.type == NoteOn || event.type == NoteOff || event.type == ControlChange) {
+            uint8_t status_byte = 0;
+            if (event.type == NoteOn) status_byte = 0x90;
+            else if (event.type == NoteOff) status_byte = 0x80;
+            else if (event.type == ControlChange) status_byte = 0xB0;
+            
+            uint8_t bytes[3] = {
+                static_cast<uint8_t>(status_byte | event.channel),
+                event.data[0],
+                event.data[1]
+            };
+            hw.midi.SendMessage(bytes, 3);
+        }
+        
+        // Get MIDI channel filter setting: 0 = Omni, 1-16 = specific channel
+        int midi_channel = plaits_module.GetMidiChannel();
+        
+        // Check if this event should be processed (Omni or matching channel)
+        // Note: event.channel is 0-15, our setting is 0=Omni, 1-16=channel
+        bool channel_match = (midi_channel == 0) || (event.channel == midi_channel - 1);
+        
+        if (!channel_match) continue;
+        
         if (event.type == NoteOn) {
             NoteOnEvent note = event.AsNoteOn();
             if (note.velocity > 0) {
+                // Trigger sample-and-hold for Bank/Engine CV
+                sample_hold_pending = true;
                 plaits_module.NoteOn(note.note, note.velocity);
             } else {
                 plaits_module.NoteOff(note.note, 0);
