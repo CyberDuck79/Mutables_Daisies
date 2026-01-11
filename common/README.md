@@ -38,18 +38,23 @@ Harmonics 0.45   [2]    >
 | Option | Values | Description |
 |--------|--------|-------------|
 | `mapping` | None, CV1-4, CC1-127 | Modulation source |
-| `plugged` | on/off + offset | Captures offset when enabled. Disabled if CC or no mapping. Sends "plugged" status to firmware if supported |
-| `attenuverter` | ±100% | Scales CV around offset point. Sent to firmware if supported |
+| `cc_number` | 1-127 | CC number (only shown if CC mapped) |
+| `plugged` | on/off + offset | Captures offset when enabled. Only available for CV mappings. If original module has jack detection, this value is passed to firmware to trigger authentic behavior |
+| `attenuverter` | ±100% (default 0%) | Scales CV around offset point when CV+plugged. If original module has hardware attenuverter, this value is passed to firmware |
 | `velocity` | ±100% | Adds velocity modulation (our layer) |
 
 **Value calculation:**
 ```
-if plugged:
+if CC mapped:
+    final = cc_value  // CC replaces knob as base value
+else if CV mapped && plugged:
     cv_signal = raw_value - saved_offset
     final = saved_offset + (cv_signal * attenuverter) + (velocity_amount * midi_velocity)
 else:
     final = raw_value
 ```
+
+**Note on CC mapping**: When mapped to CC, the CC value becomes the base value (like turning the knob). The internal envelope modulation is still active and controlled by the attenuverter.
 
 ---
 
@@ -69,7 +74,7 @@ Env In  0.72   [3]    >
 | Option | Values | Description |
 |--------|--------|-------------|
 | `mapping` | None, CV1-4 | CV source |
-| `plugged` | on/off | Auto-enabled when mapping is set. Not user-editable. Sends status to firmware |
+| `plugged` | on/off + offset | Toggle on short press. Shows offset value when enabled. If original module has jack detection, this value is passed to firmware |
 
 ---
 
@@ -90,6 +95,9 @@ Bank    Synth          >
 | Option | Values | Description |
 |--------|--------|-------------|
 | `mapping` | None, Gate1-2, CV1-4, CC1-127 | Control source |
+| `cc_number` | 1-127 | CC number (only shown if CC mapped) |
+| `plugged` | on/off + offset | Only for CV mappings. Toggle on short press. Passed to firmware if module has jack detection |
+| `attenuverter` | ±100% (default 0%) | Only for CV mappings when plugged. Passed to firmware if module has hardware attenuverter |
 
 **If Gate mapped:**
 | Option | Values | Description |
@@ -265,11 +273,34 @@ common/
 
 ### Firmware Integration
 
-Some original firmwares support:
-- **Plugged status**: Triggers alternate behavior when jack is inserted
-- **Attenuverter**: Hardware attenuverter on CV input
+Original Mutable Instruments modules often have:
+- **Jack detection**: Physical detection of cable insertion, triggering alternate behavior (e.g., switching from internal modulation to external CV)
+- **Hardware attenuverters**: Physical knobs that scale CV input before it reaches the DSP
 
-When supported by original firmware, pass these values through to get authentic behavior. When not supported, handle in our abstraction layer.
+Since Daisy Patch lacks these hardware features, we emulate them with `plugged` and `attenuverter` settings. When porting a module:
+- If the original firmware reads jack detection status → pass our `plugged` value
+- If the original firmware has attenuverter inputs → pass our `attenuverter` value
+
+This ensures authentic behavior (e.g., Plaits enables internal envelope when input is unplugged).
+
+### Native vs Emulated Attenuversion
+
+**Native attenuversion**: Some parameters in original firmware have built-in attenuverter handling (e.g., Plaits Timbre, Morph, FM modulation). For these:
+- Pass raw CV signal (value - offset) to firmware
+- Pass attenuverter value to firmware's modulation amount variable
+- Firmware handles the scaling internally
+
+**Emulated attenuversion**: For parameters without native support in firmware:
+- We compute: `result = offset + (cv_signal * attenuverter)`
+- Applied in our layer before passing to firmware
+
+### MIDI CC Mapping
+
+When a parameter is mapped to MIDI CC:
+- CC value (0-127 scaled to 0.0-1.0) **replaces** the knob as base value
+- Does **not** count as "plugged" - internal modulation (if any) still active
+- Attenuverter still controls internal modulation amount (if supported by firmware)
+- Useful for DAW automation or external MIDI controllers
 
 ### MIDI Advantages
 
