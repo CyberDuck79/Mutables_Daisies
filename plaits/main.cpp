@@ -31,9 +31,33 @@ const uint32_t LONG_PRESS_MS = 500;
 float* audio_in[4];
 float* audio_out[4];
 
+// Calculate parameter value with mapping applied
+float CalculateMappedValue(const mutables_ui::Parameter& param, float base_value, const CVInputBank& cv_inputs) {
+    const MappingConfig& m = param.mapping;
+    
+    if (m.source == MappingSource::NONE) {
+        return base_value;
+    }
+    
+    if (m.IsCVSource()) {
+        float cv_value = cv_inputs.GetFiltered(m.GetCVIndex());
+        
+        if (m.plugged) {
+            // Attenuverter emulation: cv_signal = current - offset
+            float cv_signal = cv_value - m.offset;
+            return std::clamp(m.offset + (cv_signal * m.attenuverter), 0.0f, 1.0f);
+        } else {
+            // Direct CV: just use the value
+            return cv_value;
+        }
+    }
+    
+    // CC mapping would be handled elsewhere (MIDI callback)
+    return base_value;
+}
+
 void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size) {
-    // Update CV inputs (knobs + CV)
-    // DaisyPatch knobs are indexed 0-3, CV inputs are on ADC channels 0-3
+    // Update CV inputs
     float cv1 = hw.GetKnobValue(DaisyPatch::CTRL_1);
     float cv2 = hw.GetKnobValue(DaisyPatch::CTRL_2);
     float cv3 = hw.GetKnobValue(DaisyPatch::CTRL_3);
@@ -51,12 +75,9 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     size_t param_count = plaits_module.GetParameterCount();
     for (size_t i = 0; i < param_count; i++) {
         auto& param = params[i];
-        if (param.cv_mapping.active && param.cv_mapping.cv_input >= 0) {
-            // Read actual hardware knob position (knob + CV on DaisyPatch)
-            // Filtering is already applied in cv_inputs.GetFiltered()
-            float knob_value = cv_inputs.GetFiltered(param.cv_mapping.cv_input);
-            // Use minimal hysteresis to prevent noise (0.1% threshold)
-            param.SetNormalizedWithHysteresis(knob_value, 0.001f);
+        if (param.type == ParamType::KNOB && param.mapping.IsCVSource()) {
+            float mapped = CalculateMappedValue(param, param.value, cv_inputs);
+            param.SetNormalizedWithHysteresis(mapped, 0.001f);
         }
     }
     
@@ -77,24 +98,67 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
         out[3][i] = 0.0f;
     }
     
-    // Process audio - Plaits writes to audio_out[0] and audio_out[1]
+    // Process audio
     plaits_module.Process(audio_in, audio_out, size);
+}
+
+// Cycle through mapping sources based on parameter type
+void CycleMappingSource(mutables_ui::Parameter& param, int direction) {
+    int current = static_cast<int>(param.mapping.source);
+    
+    if (param.type == ParamType::KNOB) {
+        // KNOB: None, CV1-4, CC
+        current += direction;
+        if (current < 0) current = static_cast<int>(MappingSource::CC);
+        if (current > static_cast<int>(MappingSource::CC)) current = 0;
+        // Skip Gates for KNOB
+        if (current == static_cast<int>(MappingSource::GATE1) || 
+            current == static_cast<int>(MappingSource::GATE2)) {
+            current += direction;
+        }
+    } else if (param.type == ParamType::CV) {
+        // CV: None, CV1-4 only
+        current += direction;
+        if (current < 0) current = static_cast<int>(MappingSource::CV4);
+        if (current > static_cast<int>(MappingSource::CV4)) current = 0;
+    } else if (param.type == ParamType::ENUM) {
+        // ENUM: None, Gate1-2, CV1-4, CC
+        current += direction;
+        if (current < 0) current = static_cast<int>(MappingSource::CC);
+        if (current > static_cast<int>(MappingSource::CC)) current = 0;
+    }
+    
+    param.mapping.source = static_cast<MappingSource>(current);
+    
+    // Auto-enable plugged for CV sources, disable for others
+    if (param.mapping.IsCVSource() && param.type == ParamType::KNOB) {
+        // Don't auto-enable, let user control it
+    }
 }
 
 void UpdateEncoder() {
     auto params = plaits_module.GetParameters();
     int encoder_increment = hw.encoder.Increment();
-    bool encoder_button = hw.encoder.RisingEdge();
+    bool encoder_rising = hw.encoder.RisingEdge();
     bool encoder_held = hw.encoder.Pressed();
     
-    // Track long press
-    if (encoder_button && !encoder_button_last) {
-        encoder_press_time = System::GetNow();
+    // Track press time for long press
+    static uint32_t press_start = 0;
+    if (encoder_rising) {
+        press_start = System::GetNow();
     }
     
-    bool long_press = false;
+    bool long_press_detected = false;
+    bool short_press = false;
+    
     if (!encoder_held && encoder_button_last) {
-        long_press = (System::GetNow() - encoder_press_time) > LONG_PRESS_MS;
+        // Button just released
+        uint32_t press_duration = System::GetNow() - press_start;
+        if (press_duration >= LONG_PRESS_MS) {
+            long_press_detected = true;
+        } else {
+            short_press = true;
+        }
     }
     
     encoder_button_last = encoder_held;
@@ -105,10 +169,18 @@ void UpdateEncoder() {
             if (encoder_increment > 0) menu.NextParam();
             if (encoder_increment < 0) menu.PrevParam();
             
-            if (encoder_button && !long_press) {
-                menu.state = UIState::EditValue;
-            } else if (long_press) {
-                menu.EnterSubmenu(menu.selected_param);
+            if (short_press) {
+                // Only enter edit mode for editable params
+                if (params[menu.selected_param].IsEditable()) {
+                    menu.state = UIState::EditValue;
+                }
+            } else if (long_press_detected) {
+                // Enter submenu for params that have one
+                if (params[menu.selected_param].HasSubmenu()) {
+                    menu.EnterSubmenu(menu.selected_param, 
+                                     params[menu.selected_param].type,
+                                     params[menu.selected_param].mapping);
+                }
             }
             break;
             
@@ -117,7 +189,7 @@ void UpdateEncoder() {
             
             if (encoder_increment != 0) {
                 float step = 0.01f;
-                if (param.type == ParamType::Enum || param.type == ParamType::Integer) {
+                if (param.type == ParamType::ENUM || param.type == ParamType::MIDI) {
                     step = 1.0f;
                 }
                 
@@ -125,27 +197,109 @@ void UpdateEncoder() {
                 param.value = std::clamp(param.value, param.min, param.max);
             }
             
-            if (encoder_button) {
+            if (short_press || long_press_detected) {
                 menu.state = UIState::Navigate;
             }
             break;
         }
             
-        case UIState::Submenu:
-            // TODO: Implement submenu navigation
-            if (long_press) {
+        case UIState::Submenu: {
+            auto& param = params[menu.submenu_param_index];
+            
+            // Navigate submenu items
+            if (encoder_increment > 0) {
+                menu.NextSubmenuItem(param.type, param.mapping);
+            }
+            if (encoder_increment < 0) {
+                menu.PrevSubmenuItem(param.type, param.mapping);
+            }
+            
+            if (short_press) {
+                int item = menu.submenu_selected_item;
+                int item_count = menu.GetSubmenuItemCount(param.type, param.mapping);
+                
+                // Check if it's the Back item (last item)
+                if (item == item_count - 1) {
+                    menu.ExitSubmenu();
+                } else if (param.type == ParamType::KNOB && item == 1) {
+                    // Plugged toggle - special handling
+                    if (param.mapping.IsCVSource()) {
+                        param.mapping.plugged = !param.mapping.plugged;
+                        if (param.mapping.plugged) {
+                            // Capture current knob value as offset
+                            int cv_idx = param.mapping.GetCVIndex();
+                            if (cv_idx >= 0) {
+                                param.mapping.offset = cv_inputs.GetFiltered(cv_idx);
+                            }
+                        }
+                    }
+                } else {
+                    // Enter edit mode for this item
+                    menu.state = UIState::SubmenuEdit;
+                }
+            }
+            
+            if (long_press_detected) {
                 menu.ExitSubmenu();
             }
             break;
+        }
             
-        case UIState::SubmenuEdit:
-            // TODO: Implement submenu editing
+        case UIState::SubmenuEdit: {
+            auto& param = params[menu.submenu_param_index];
+            int item = menu.submenu_selected_item;
+            
+            if (encoder_increment != 0) {
+                if (param.type == ParamType::KNOB) {
+                    switch (item) {
+                        case 0:  // Mapping
+                            CycleMappingSource(param, encoder_increment);
+                            break;
+                        case 2:  // Attenuverter
+                            param.mapping.attenuverter += encoder_increment * 0.05f;
+                            param.mapping.attenuverter = std::clamp(param.mapping.attenuverter, -1.0f, 1.0f);
+                            break;
+                        case 3:  // Velocity
+                            param.mapping.velocity_amount += encoder_increment * 0.05f;
+                            param.mapping.velocity_amount = std::clamp(param.mapping.velocity_amount, -1.0f, 1.0f);
+                            break;
+                    }
+                } else if (param.type == ParamType::CV) {
+                    if (item == 0) {  // Mapping
+                        CycleMappingSource(param, encoder_increment);
+                    }
+                } else if (param.type == ParamType::ENUM) {
+                    switch (item) {
+                        case 0:  // Mapping
+                            CycleMappingSource(param, encoder_increment);
+                            break;
+                        case 1:  // Trigger (if Gate mapped)
+                            if (param.mapping.IsGateSource()) {
+                                int t = static_cast<int>(param.mapping.trigger) + encoder_increment;
+                                t = std::clamp(t, 0, 2);
+                                param.mapping.trigger = static_cast<TriggerMode>(t);
+                            }
+                            break;
+                        case 2:  // Action (if Gate mapped)
+                            if (param.mapping.IsGateSource()) {
+                                int a = static_cast<int>(param.mapping.action) + encoder_increment;
+                                a = std::clamp(a, 0, 3);
+                                param.mapping.action = static_cast<EnumAction>(a);
+                            }
+                            break;
+                    }
+                }
+            }
+            
+            if (short_press || long_press_detected) {
+                menu.state = UIState::Submenu;
+            }
             break;
+        }
     }
 }
 
 void ProcessMidi() {
-    // Process all pending MIDI messages from hw.midi (UART MIDI input jack)
     while (hw.midi.HasEvents()) {
         MidiEvent event = hw.midi.PopEvent();
         
@@ -154,7 +308,6 @@ void ProcessMidi() {
             if (note.velocity > 0) {
                 plaits_module.NoteOn(note.note, note.velocity);
             } else {
-                // Note on with velocity 0 = note off
                 plaits_module.NoteOff(note.note, 0);
             }
         } else if (event.type == NoteOff) {
@@ -175,48 +328,36 @@ void UpdateDisplay() {
 }
 
 int main(void) {
-    // Initialize hardware (includes MIDI UART)
     hw.Init();
-    hw.SetAudioBlockSize(24); // Plaits block size
+    hw.SetAudioBlockSize(24);
     hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);
     
-    // Initialize module
     plaits_module.Init(48000.0f);
     
-    // Initialize UI
     menu.param_count = plaits_module.GetParameterCount();
     display.Init(&hw);
     
-    // Show boot screen
     display.RenderBootScreen("PLAITS");
     System::Delay(2800);
     
-    // Start audio
     hw.StartAdc();
     hw.StartAudio(AudioCallback);
     hw.midi.StartReceive();
     
-    // Main loop
     uint32_t last_display_update = 0;
     while(1) {
-        // Process MIDI
         hw.midi.Listen();
         ProcessMidi();
         
-        // Process hardware controls (encoder, gates, etc.) - run fast for encoder responsiveness
         hw.ProcessAllControls();
-        
-        // Update encoder state
         UpdateEncoder();
         
-        // Update display at ~60Hz
         uint32_t now = System::GetNow();
         if (now - last_display_update >= 16) {
             last_display_update = now;
             UpdateDisplay();
         }
         
-        // Minimal delay to prevent busy-wait
         System::Delay(1);
     }
 }

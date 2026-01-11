@@ -22,11 +22,9 @@ public:
         
         hw_->display.Fill(false);
         
-        // Calculate center position for the text
-        // Font_7x10: 7px wide per character, display is 128px wide
         int text_len = strlen(module_name);
         int x = (128 - (text_len * 7)) / 2;
-        int y = (64 - 10) / 2;  // Center vertically (10px font height)
+        int y = (64 - 10) / 2;
         
         hw_->display.SetCursor(x, y);
         hw_->display.WriteString(module_name, Font_7x10, true);
@@ -48,14 +46,14 @@ public:
                           line, 
                           param_idx == menu.selected_param,
                           menu.state == UIState::EditValue && param_idx == menu.selected_param);
-            line += 14;  // 10px font + 4px padding for descenders
+            line += 14;
         }
         
         hw_->display.Update();
     }
     
-    // Render CV mapping submenu
-    void RenderSubmenu(const MenuState& menu, Parameter& param) {
+    // Render submenu for KNOB type
+    void RenderKnobSubmenu(const MenuState& menu, Parameter& param) {
         if (!hw_) return;
         
         hw_->display.Fill(false);
@@ -63,38 +61,203 @@ public:
         char buffer[32];
         
         // Title
-        snprintf(buffer, sizeof(buffer), "CV MAP: %.10s", param.name);
+        snprintf(buffer, sizeof(buffer), "%.10s", param.name);
         hw_->display.SetCursor(0, 1);
         hw_->display.WriteString(buffer, Font_7x10, true);
         
-        // CV Source
-        RenderSubmenuItem(SubmenuItem::CVSource, 16, 
-                         menu.selected_submenu_item == SubmenuItem::CVSource,
-                         menu.state == UIState::SubmenuEdit,
-                         param);
+        int line = 14;
+        int item_index = 0;
+        
+        // Mapping
+        RenderSubmenuLine("Map", GetMappingSourceName(param.mapping.source, param.mapping.cc_number),
+                         line, menu.submenu_selected_item == item_index,
+                         menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == item_index);
+        line += 13;
+        item_index++;
+        
+        // Plugged (only if CV mapped, not CC)
+        if (param.mapping.IsCVSource()) {
+            RenderSubmenuLine("Plugged", param.mapping.plugged ? "ON" : "OFF",
+                             line, menu.submenu_selected_item == item_index,
+                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == item_index);
+        } else {
+            RenderSubmenuLine("Plugged", "-",
+                             line, menu.submenu_selected_item == item_index, false);
+        }
+        line += 13;
+        item_index++;
         
         // Attenuverter
-        RenderSubmenuItem(SubmenuItem::Attenuverter, 32,
-                         menu.selected_submenu_item == SubmenuItem::Attenuverter,
-                         menu.state == UIState::SubmenuEdit,
-                         param);
+        snprintf(buffer, sizeof(buffer), "%+d%%", (int)(param.mapping.attenuverter * 100.0f));
+        RenderSubmenuLine("Atten", buffer,
+                         line, menu.submenu_selected_item == item_index,
+                         menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == item_index);
+        line += 13;
+        item_index++;
         
-        // Capture Origin
-        RenderSubmenuItem(SubmenuItem::CaptureOrigin, 48,
-                         menu.selected_submenu_item == SubmenuItem::CaptureOrigin,
-                         false,
-                         param);
+        // Velocity
+        snprintf(buffer, sizeof(buffer), "%+d%%", (int)(param.mapping.velocity_amount * 100.0f));
+        RenderSubmenuLine("Velocity", buffer,
+                         line, menu.submenu_selected_item == item_index,
+                         menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == item_index);
         
         hw_->display.Update();
+    }
+    
+    // Render submenu for CV type
+    void RenderCVSubmenu(const MenuState& menu, Parameter& param) {
+        if (!hw_) return;
+        
+        hw_->display.Fill(false);
+        
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), "%.10s", param.name);
+        hw_->display.SetCursor(0, 1);
+        hw_->display.WriteString(buffer, Font_7x10, true);
+        
+        // Only mapping option for CV
+        const char* source_name = "None";
+        if (param.mapping.IsCVSource()) {
+            static const char* cv_names[] = {"CV1", "CV2", "CV3", "CV4"};
+            source_name = cv_names[param.mapping.GetCVIndex()];
+        }
+        
+        RenderSubmenuLine("Map", source_name,
+                         14, menu.submenu_selected_item == 0,
+                         menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 0);
+        
+        // Back
+        RenderSubmenuLine("Back", "",
+                         27, menu.submenu_selected_item == 1, false);
+        
+        hw_->display.Update();
+    }
+    
+    // Render submenu for ENUM type
+    void RenderEnumSubmenu(const MenuState& menu, Parameter& param) {
+        if (!hw_) return;
+        
+        hw_->display.Fill(false);
+        
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), "%.10s", param.name);
+        hw_->display.SetCursor(0, 1);
+        hw_->display.WriteString(buffer, Font_7x10, true);
+        
+        int line = 14;
+        int item_index = 0;
+        
+        // Mapping
+        RenderSubmenuLine("Map", GetMappingSourceName(param.mapping.source, param.mapping.cc_number),
+                         line, menu.submenu_selected_item == item_index,
+                         menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == item_index);
+        line += 13;
+        item_index++;
+        
+        // Trigger and Action only if Gate mapped
+        if (param.mapping.IsGateSource()) {
+            // Trigger
+            static const char* trigger_names[] = {"Rise", "Fall", "Both"};
+            RenderSubmenuLine("Trigger", trigger_names[static_cast<int>(param.mapping.trigger)],
+                             line, menu.submenu_selected_item == item_index,
+                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == item_index);
+            line += 13;
+            item_index++;
+            
+            // Action
+            static const char* action_names[] = {"++", "--", "+-", "-+"};
+            RenderSubmenuLine("Action", action_names[static_cast<int>(param.mapping.action)],
+                             line, menu.submenu_selected_item == item_index,
+                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == item_index);
+            line += 13;
+            item_index++;
+        }
+        
+        // Back
+        RenderSubmenuLine("Back", "",
+                         line, menu.submenu_selected_item == item_index, false);
+        
+        hw_->display.Update();
+    }
+    
+    // Generic submenu renderer that dispatches based on type
+    void RenderSubmenu(const MenuState& menu, Parameter& param) {
+        switch (param.type) {
+            case ParamType::KNOB:
+                RenderKnobSubmenu(menu, param);
+                break;
+            case ParamType::CV:
+                RenderCVSubmenu(menu, param);
+                break;
+            case ParamType::ENUM:
+                RenderEnumSubmenu(menu, param);
+                break;
+            default:
+                // Fallback - just show back option
+                hw_->display.Fill(false);
+                hw_->display.SetCursor(0, 1);
+                hw_->display.WriteString(param.name, Font_7x10, true);
+                RenderSubmenuLine("Back", "", 14, true, false);
+                hw_->display.Update();
+                break;
+        }
     }
     
 private:
     daisy::DaisyPatch* hw_;
     
+    const char* GetMappingSourceName(MappingSource source, int cc_number) {
+        switch (source) {
+            case MappingSource::NONE: return "None";
+            case MappingSource::CV1: return "CV1";
+            case MappingSource::CV2: return "CV2";
+            case MappingSource::CV3: return "CV3";
+            case MappingSource::CV4: return "CV4";
+            case MappingSource::GATE1: return "G1";
+            case MappingSource::GATE2: return "G2";
+            case MappingSource::CC: {
+                static char cc_buf[8];
+                snprintf(cc_buf, sizeof(cc_buf), "CC%d", cc_number);
+                return cc_buf;
+            }
+            default: return "?";
+        }
+    }
+    
+    void RenderSubmenuLine(const char* label, const char* value, int y, bool selected, bool editing) {
+        char buffer[32];
+        
+        // Selection indicator
+        if (selected) {
+            hw_->display.SetCursor(0, y);
+            hw_->display.WriteString(">", Font_7x10, true);
+        }
+        
+        // Label
+        hw_->display.SetCursor(8, y);
+        snprintf(buffer, sizeof(buffer), "%.8s", label);
+        hw_->display.WriteString(buffer, Font_7x10, true);
+        
+        // Value
+        if (value && strlen(value) > 0) {
+            int value_len = strlen(value);
+            int value_width = value_len * 7;
+            int value_x = 72;
+            
+            if (editing) {
+                hw_->display.DrawLine(value_x, y, value_x + value_width - 1, y, true);
+                hw_->display.DrawLine(value_x, y + 11, value_x + value_width - 1, y + 11, true);
+            }
+            
+            hw_->display.SetCursor(value_x, y + 1);
+            hw_->display.WriteString(value, Font_7x10, !editing);
+        }
+    }
+    
     void RenderParameter(const Parameter& param, int y, bool selected, bool editing) {
         char buffer[32];
         
-        // Parameter name (truncated)
+        // Parameter name
         hw_->display.SetCursor(0, y + 1);
         snprintf(buffer, sizeof(buffer), "%.10s", param.name);
         int name_len = strlen(buffer);
@@ -105,132 +268,76 @@ private:
             hw_->display.DrawLine(0, y + 11, name_len * 7 - 1, y + 11, true);
         }
         
-        // Value - draw top and bottom lines if editing, with inverted text
-        FormatValue(param, buffer, sizeof(buffer));
-        int value_len = strlen(buffer);
-        int value_width = value_len * 7;
-        
-        if (editing) {
-            // Draw white line above and below VALUE ONLY
-            hw_->display.DrawLine(76, y + 1, 76 + value_width - 1, y + 1, true);
-            hw_->display.DrawLine(76, y + 12, 76 + value_width - 1, y + 12, true);
-        }
-        
-        // Write value text
-        hw_->display.SetCursor(76, y + 2);
-        hw_->display.WriteString(buffer, Font_7x10, !editing);
-        
-        // Draw CV indicator separately if present - ALWAYS with top/bottom lines
-        if (param.cv_mapping.active && param.cv_mapping.cv_input >= 0) {
-            int cv_x = 76 + value_width + 7;  // After value + one space width
+        // Value (skip for SAVE/LOAD/SUB)
+        if (param.type != ParamType::SAVE && 
+            param.type != ParamType::LOAD && 
+            param.type != ParamType::SUB) {
+            FormatValue(param, buffer, sizeof(buffer));
+            int value_len = strlen(buffer);
+            int value_width = value_len * 7;
             
-            // Draw white lines above and below CV number (always)
-            hw_->display.DrawLine(cv_x, y + 1, cv_x + 6, y + 1, true);
-            hw_->display.DrawLine(cv_x, y + 12, cv_x + 6, y + 12, true);
+            if (editing) {
+                hw_->display.DrawLine(76, y + 1, 76 + value_width - 1, y + 1, true);
+                hw_->display.DrawLine(76, y + 12, 76 + value_width - 1, y + 12, true);
+            }
             
-            hw_->display.DrawRect(cv_x, y + 2, 7, 10, true, true);  // White background
-            hw_->display.SetCursor(cv_x, y + 2);
-            char cv_num[2];
-            snprintf(cv_num, sizeof(cv_num), "%d", param.cv_mapping.cv_input + 1);
-            hw_->display.WriteString(cv_num, Font_7x10, false);  // Black text on white
+            hw_->display.SetCursor(76, y + 2);
+            hw_->display.WriteString(buffer, Font_7x10, !editing);
+            
+            // Mapping indicator
+            RenderMappingIndicator(param, y, 76 + value_width + 7);
         }
         
         // Submenu indicator
-        hw_->display.SetCursor(121, y + 1);
-        hw_->display.WriteString(">", Font_7x10, true);
-    }
-    
-    void RenderSubmenuItem(SubmenuItem item, int y, bool selected, bool editing, const Parameter& param) {
-        char buffer[32];
-        
-        if (selected) {
-            hw_->display.SetCursor(0, y + 1);
+        if (param.HasSubmenu()) {
+            hw_->display.SetCursor(121, y + 1);
             hw_->display.WriteString(">", Font_7x10, true);
         }
+    }
+    
+    void RenderMappingIndicator(const Parameter& param, int y, int x) {
+        if (param.mapping.source == MappingSource::NONE) return;
         
-        hw_->display.SetCursor(8, y + 1);
+        char indicator[4] = {0};
         
-        switch (item) {
-            case SubmenuItem::CVSource:
-                {
-                    hw_->display.WriteString("Source:", Font_7x10, true);
-                    
-                    if (param.cv_mapping.cv_input < 0) {
-                        snprintf(buffer, sizeof(buffer), "None");
-                    } else {
-                        snprintf(buffer, sizeof(buffer), "CV%d", param.cv_mapping.cv_input + 1);
-                    }
-                    int text_len = strlen(buffer);
-                    int text_width = text_len * 7;
-                    if (editing) {
-                        // Draw white line above and below
-                        hw_->display.DrawLine(61, y + 1, 61 + text_width - 1, y + 1, true);
-                        hw_->display.DrawLine(61, y + 12, 61 + text_width - 1, y + 12, true);
-                    }
-                    hw_->display.SetCursor(61, y + 2);
-                    hw_->display.WriteString(buffer, Font_7x10, !editing);
-                }
-                break;
-                
-            case SubmenuItem::Attenuverter:
-                {
-                    hw_->display.WriteString("Atten:", Font_7x10, true);
-                    snprintf(buffer, sizeof(buffer), "%+.2f", param.cv_mapping.attenuverter);
-                    int atten_len = strlen(buffer);
-                    int atten_width = atten_len * 7;
-                    if (editing) {
-                        // Draw white line above and below
-                        hw_->display.DrawLine(61, y + 1, 61 + atten_width - 1, y + 1, true);
-                        hw_->display.DrawLine(61, y + 12, 61 + atten_width - 1, y + 12, true);
-                    }
-                    hw_->display.SetCursor(61, y + 2);
-                    hw_->display.WriteString(buffer, Font_7x10, !editing);
-                }
-                break;
-                
-            case SubmenuItem::CaptureOrigin:
-                {
-                    const char* text = "Capture Origin";
-                    int capture_width = 14 * 7;  // 14 chars
-                    if (editing) {
-                        // Draw white line above and below
-                        hw_->display.DrawLine(8, y + 1, 8 + capture_width - 1, y + 1, true);
-                        hw_->display.DrawLine(8, y + 12, 8 + capture_width - 1, y + 12, true);
-                    }
-                    hw_->display.SetCursor(8, y + 2);
-                    hw_->display.WriteString(text, Font_7x10, !editing);
-                }
-                break;
-                
-            default:
-                break;
+        if (param.mapping.IsCVSource()) {
+            // [1]-[4] for CV
+            indicator[0] = '1' + param.mapping.GetCVIndex();
+        } else if (param.mapping.IsGateSource()) {
+            // G1 or G2 for Gate
+            indicator[0] = 'G';
+            indicator[1] = '1' + param.mapping.GetGateIndex();
+        } else if (param.mapping.source == MappingSource::CC) {
+            // # for CC
+            indicator[0] = '#';
+        }
+        
+        if (indicator[0]) {
+            int ind_len = strlen(indicator);
+            int ind_width = ind_len * 7;
+            
+            // Draw box around indicator
+            hw_->display.DrawLine(x, y + 1, x + ind_width - 1, y + 1, true);
+            hw_->display.DrawLine(x, y + 12, x + ind_width - 1, y + 12, true);
+            hw_->display.DrawRect(x, y + 2, ind_width, 10, true, true);
+            
+            hw_->display.SetCursor(x, y + 2);
+            hw_->display.WriteString(indicator, Font_7x10, false);
         }
     }
     
     void FormatValue(const Parameter& param, char* buffer, size_t size) {
         switch (param.type) {
-            case ParamType::Enum:
-                snprintf(buffer, size, "%.8s", param.GetEnumLabel());
+            case ParamType::ENUM:
+                snprintf(buffer, size, "%.6s", param.GetEnumLabel());
                 break;
-            case ParamType::Toggle:
-                snprintf(buffer, size, "%s", param.value > 0.5f ? "ON" : "OFF");
+            case ParamType::MIDI:
+                snprintf(buffer, size, "CH%d", param.GetIndex() + 1);
                 break;
-            case ParamType::Integer:
-                snprintf(buffer, size, "%d", param.GetIndex());
-                break;
-            case ParamType::Bipolar:
-                {
-                    // Custom float formatting: multiply by 100, format as X.XX
-                    int val_int = (int)(param.value * 100.0f);
-                    int whole = val_int / 100;
-                    int frac = (val_int < 0 ? -val_int : val_int) % 100;
-                    snprintf(buffer, size, "%+d.%02d", whole, frac);
-                }
-                break;
-            case ParamType::Continuous:
+            case ParamType::CV:
+            case ParamType::KNOB:
             default:
                 {
-                    // Custom float formatting: multiply by 100, format as X.XX
                     int val_int = (int)(param.value * 100.0f);
                     int whole = val_int / 100;
                     int frac = val_int % 100;

@@ -9,25 +9,24 @@ class CVInput {
 public:
     CVInput() : filtered_value_(0.0f) {}
     
-    // Process CV input with attenuverter simulation
-    // knob_value: current knob position (0.0 to 1.0)
-    // cv_value: CV input value (0.0 to 1.0, hardware already normalized)
-    // Returns: final parameter value with CV applied
-    static float ProcessWithMapping(const Parameter& param, 
-                                   float knob_value, 
-                                   float cv_value) {
-        if (param.cv_mapping.cv_input < 0 || !param.cv_mapping.active) {
-            return knob_value;
+    // Process CV input with attenuverter emulation
+    // cv_value: Current CV value from CVInputBank
+    // mapping: Parameter's mapping configuration
+    // Returns: Final parameter value with attenuverter applied
+    static float ProcessWithMapping(float cv_value, const MappingConfig& mapping) {
+        if (!mapping.IsCVSource()) {
+            return cv_value;
         }
         
-        // CV contribution scaled by attenuverter
-        float cv_contribution = (cv_value - 0.5f) * 2.0f * param.cv_mapping.attenuverter;
-        
-        // Apply relative to origin offset
-        float result = param.cv_mapping.origin_offset + cv_contribution;
-        
-        // Clamp to normalized range
-        return std::clamp(result, 0.0f, 1.0f);
+        if (mapping.plugged) {
+            // Attenuverter emulation: cv_signal = current - offset
+            float cv_signal = cv_value - mapping.offset;
+            float result = mapping.offset + (cv_signal * mapping.attenuverter);
+            return std::clamp(result, 0.0f, 1.0f);
+        } else {
+            // No plugged: direct value
+            return cv_value;
+        }
     }
     
     // Simple one-pole lowpass filter for CV input

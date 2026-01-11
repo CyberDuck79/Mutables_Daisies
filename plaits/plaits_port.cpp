@@ -102,38 +102,25 @@ void PlaitsPort::Init(float sample_rate) {
 }
 
 void PlaitsPort::SetupParameters() {
-    params_[0] = mutables_ui::Parameter("Bank", bank_names_, kNumBanks);
-    params_[1] = mutables_ui::Parameter("Engine", synth_engine_names_, kNumSynthEngines);
+    // Bank and Engine selection (ENUM type)
+    params_[0] = mutables_ui::Parameter::Enum("Bank", bank_names_, kNumBanks);
+    params_[1] = mutables_ui::Parameter::Enum("Engine", synth_engine_names_, kNumSynthEngines);
     current_bank_ = 0;
     
-    params_[2] = mutables_ui::Parameter("Harmonics", 0.0f, 1.0f);
-    params_[2].cv_mapping.cv_input = 1;  // CV 2
-    params_[2].cv_mapping.active = true;
-    params_[2].cv_mapping.attenuverter = 1.0f;
-    
-    params_[3] = mutables_ui::Parameter("Timbre", 0.0f, 1.0f);
-    params_[3].cv_mapping.cv_input = 2;  // CV 3
-    params_[3].cv_mapping.active = true;
-    params_[3].cv_mapping.attenuverter = 1.0f;
-    
-    params_[4] = mutables_ui::Parameter("Morph", 0.0f, 1.0f);
-    params_[4].cv_mapping.cv_input = 3;  // CV 4
-    params_[4].cv_mapping.active = true;
-    params_[4].cv_mapping.attenuverter = 1.0f;
+    // Main oscillator parameters (KNOB type) - no default mapping
+    params_[2] = mutables_ui::Parameter::Knob("Harmonics", 0.0f, 1.0f, 0.5f);
+    params_[3] = mutables_ui::Parameter::Knob("Timbre", 0.0f, 1.0f, 0.5f);
+    params_[4] = mutables_ui::Parameter::Knob("Morph", 0.0f, 1.0f, 0.5f);
     
     // Transpose: 0.5 = no transpose, 0.0 = -12 semitones, 1.0 = +12 semitones
-    params_[5] = mutables_ui::Parameter("Transpose", 0.0f, 1.0f);
-    params_[5].value = 0.5f;  // No transpose
-    params_[5].cv_mapping.cv_input = 0;  // CV 1
-    params_[5].cv_mapping.active = true;
-    params_[5].cv_mapping.attenuverter = 1.0f;
+    params_[5] = mutables_ui::Parameter::Knob("Transpose", 0.0f, 1.0f, 0.5f);
     
-    params_[6] = mutables_ui::Parameter("LPG Colour", 0.0f, 1.0f);
-    params_[7] = mutables_ui::Parameter("LPG Decay", 0.0f, 1.0f);
-    params_[7].value = 0.5f;
+    // LPG parameters
+    params_[6] = mutables_ui::Parameter::Knob("LPG Color", 0.0f, 1.0f, 0.5f);
+    params_[7] = mutables_ui::Parameter::Knob("LPG Decay", 0.0f, 1.0f, 0.5f);
     
-    params_[8] = mutables_ui::Parameter("Level", 0.0f, 1.0f);
-    params_[8].value = 0.8f;
+    // Output level
+    params_[8] = mutables_ui::Parameter::Knob("Level", 0.0f, 1.0f, 0.8f);
 }
 
 void PlaitsPort::UpdateEngineListForBank(int bank) {
@@ -144,13 +131,13 @@ void PlaitsPort::UpdateEngineListForBank(int bank) {
     // Reset engine selection to 0 when changing banks
     switch (bank) {
         case 0:  // Synth
-            params_[1] = mutables_ui::Parameter("Engine", synth_engine_names_, kNumSynthEngines);
+            params_[1] = mutables_ui::Parameter::Enum("Engine", synth_engine_names_, kNumSynthEngines);
             break;
         case 1:  // Drum
-            params_[1] = mutables_ui::Parameter("Engine", drum_engine_names_, kNumDrumEngines);
+            params_[1] = mutables_ui::Parameter::Enum("Engine", drum_engine_names_, kNumDrumEngines);
             break;
         case 2:  // New
-            params_[1] = mutables_ui::Parameter("Engine", new_engine_names_, kNumNewEngines);
+            params_[1] = mutables_ui::Parameter::Enum("Engine", new_engine_names_, kNumNewEngines);
             break;
     }
 }

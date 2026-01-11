@@ -163,8 +163,8 @@ Save          >
 
 **Behavior:**
 1. Select → Enter character input mode
-2. Character selection: rotate through `a-z`, `0-9`, `-`, `_`, `.`
-3. Short press → confirm character, move to next
+2. Character selection: rotate through `a-z`, `0-9`, `-`, `_`, `.`, ` `
+3. Short press → if not ` ` confirm character, move to next OR if ` ` return to previous character, return to root if 1st character
 4. Long press → save preset and return to root
 
 **Storage location:** `<module_name>/presets/<preset_name>.bin`
@@ -281,4 +281,4 @@ Converting V/Oct + Gate to MIDI provides:
 
 ### Gate Output
 
-MIDI clock can be output as Gate signal for synchronization with other modules.
+Gate output can be configured with an enum to replicate input midi Gate or input midi Clock.
