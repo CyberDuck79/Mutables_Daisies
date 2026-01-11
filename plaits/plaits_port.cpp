@@ -119,8 +119,9 @@ void PlaitsPort::SetupParameters() {
     params_[6] = mutables_ui::Parameter::Knob("LPG Color", 0.0f, 1.0f, 0.5f);
     params_[7] = mutables_ui::Parameter::Knob("LPG Decay", 0.0f, 1.0f, 0.5f);
     
-    // Output level
-    params_[8] = mutables_ui::Parameter::Knob("Level", 0.0f, 1.0f, 0.8f);
+    // Output level - CV input type (direct input, no attenuverter emulation)
+    params_[8] = mutables_ui::Parameter::CV("Level");
+    params_[8].value = 0.8f;  // Default level
 }
 
 void PlaitsPort::UpdateEngineListForBank(int bank) {

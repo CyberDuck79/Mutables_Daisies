@@ -64,8 +64,15 @@ int CalculateEnumFromCV(const mutables_ui::Parameter& param, const CVInputBank& 
     
     float cv_value = cv_inputs.GetFiltered(m.GetCVIndex());
     
-    // Apply attenuverter (centered at 0.5)
-    float scaled = 0.5f + (cv_value - 0.5f) * m.attenuverter;
+    // If plugged, use offset-based attenuverter (like KNOB)
+    float scaled;
+    if (m.plugged) {
+        float cv_signal = cv_value - m.offset;
+        scaled = 0.5f + cv_signal * m.attenuverter;
+    } else {
+        // Without plugged, simple centered scaling
+        scaled = 0.5f + (cv_value - 0.5f) * m.attenuverter;
+    }
     scaled = std::clamp(scaled, 0.0f, 1.0f);
     
     // Quantize to enum count
@@ -153,6 +160,10 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
         if (param.type == ParamType::KNOB && param.mapping.IsCVSource()) {
             float mapped = CalculateMappedValue(param, param.value, cv_inputs);
             param.SetNormalizedWithHysteresis(mapped, 0.001f);
+        } else if (param.type == ParamType::CV && param.mapping.IsCVSource()) {
+            // CV type - direct read from CV input (no attenuverter emulation)
+            float cv_value = cv_inputs.GetFiltered(param.mapping.GetCVIndex());
+            param.SetNormalizedWithHysteresis(cv_value, 0.001f);
         } else if (param.type == ParamType::ENUM && param.mapping.IsCVSource()) {
             // CV control for ENUM - quantized selection
             int new_index = CalculateEnumFromCV(param, cv_inputs);
@@ -197,15 +208,13 @@ void CycleMappingSource(mutables_ui::Parameter& param, int direction) {
     int current = static_cast<int>(param.mapping.source);
     
     if (param.type == ParamType::KNOB) {
-        // KNOB: None, CV1-4, CC
-        current += direction;
-        if (current < 0) current = static_cast<int>(MappingSource::CC);
-        if (current > static_cast<int>(MappingSource::CC)) current = 0;
-        // Skip Gates for KNOB
-        if (current == static_cast<int>(MappingSource::GATE1) || 
-            current == static_cast<int>(MappingSource::GATE2)) {
+        // KNOB: None, CV1-4, CC (skip Gate1, Gate2)
+        do {
             current += direction;
-        }
+            if (current < 0) current = static_cast<int>(MappingSource::CC);
+            if (current > static_cast<int>(MappingSource::CC)) current = 0;
+        } while (current == static_cast<int>(MappingSource::GATE1) || 
+                 current == static_cast<int>(MappingSource::GATE2));
     } else if (param.type == ParamType::CV) {
         // CV: None, CV1-4 only
         current += direction;
@@ -321,6 +330,20 @@ void UpdateEncoder() {
                         // Enter edit mode for other items
                         menu.state = UIState::SubmenuEdit;
                     }
+                } else if (param.type == ParamType::ENUM) {
+                    if (item == 2 && param.mapping.IsCVSource()) {
+                        // Plugged toggle - special handling
+                        param.mapping.plugged = !param.mapping.plugged;
+                        if (param.mapping.plugged) {
+                            int cv_idx = param.mapping.GetCVIndex();
+                            if (cv_idx >= 0) {
+                                param.mapping.offset = cv_inputs.GetFiltered(cv_idx);
+                            }
+                        }
+                    } else {
+                        // Enter edit mode for other items
+                        menu.state = UIState::SubmenuEdit;
+                    }
                 } else {
                     // Enter edit mode for this item
                     menu.state = UIState::SubmenuEdit;
@@ -373,13 +396,14 @@ void UpdateEncoder() {
                                 param.mapping.cc_number = std::clamp(param.mapping.cc_number, 1, 127);
                             }
                             break;
-                        case 2:  // Attenuverter (if CV or CC mapped)
+                        // case 2: Plugged - handled on short press, not editable
+                        case 3:  // Attenuverter (if CV or CC mapped)
                             if (param.mapping.IsCVSource() || param.mapping.source == MappingSource::CC) {
                                 param.mapping.attenuverter += encoder_increment * 0.05f;
                                 param.mapping.attenuverter = std::clamp(param.mapping.attenuverter, -1.0f, 1.0f);
                             }
                             break;
-                        case 3:  // Trigger (if Gate mapped)
+                        case 4:  // Trigger (if Gate mapped)
                             if (param.mapping.IsGateSource()) {
                                 int t = static_cast<int>(param.mapping.trigger) + encoder_increment;
                                 t = std::clamp(t, 0, 2);
@@ -390,7 +414,7 @@ void UpdateEncoder() {
                                 }
                             }
                             break;
-                        case 4:  // Action (if Gate mapped)
+                        case 5:  // Action (if Gate mapped)
                             if (param.mapping.IsGateSource()) {
                                 int max_action = (param.mapping.trigger == TriggerMode::RISE_AND_FALL) ? 3 : 1;
                                 int a = static_cast<int>(param.mapping.action) + encoder_increment;

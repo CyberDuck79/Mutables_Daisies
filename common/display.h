@@ -87,7 +87,15 @@ public:
         
         // Item 2: Plugged (only if CV mapped)
         if (param.mapping.IsCVSource()) {
-            RenderSubmenuLine("Plugged", param.mapping.plugged ? "ON" : "OFF",
+            if (param.mapping.plugged) {
+                int offset_int = (int)(param.mapping.offset * 100.0f);
+                int whole = offset_int / 100;
+                int frac = offset_int % 100;
+                snprintf(buffer, sizeof(buffer), "Yes %d.%02d", whole, frac);
+            } else {
+                snprintf(buffer, sizeof(buffer), "No");
+            }
+            RenderSubmenuLine("Plugged", buffer,
                              line, menu.submenu_selected_item == 2,
                              menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 2);
             line += 13;
@@ -121,7 +129,9 @@ public:
         hw_->display.SetCursor(0, 1);
         hw_->display.WriteString(buffer, Font_7x10, true);
         
-        // Only mapping option for CV
+        int line = 14;
+        
+        // Item 0: Mapping
         const char* source_name = "None";
         if (param.mapping.IsCVSource()) {
             static const char* cv_names[] = {"CV1", "CV2", "CV3", "CV4"};
@@ -129,8 +139,16 @@ public:
         }
         
         RenderSubmenuLine("Map", source_name,
-                         14, menu.submenu_selected_item == 0,
+                         line, menu.submenu_selected_item == 0,
                          menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 0);
+        line += 13;
+        
+        // Item 1: Plugged (only if CV mapped, read-only, auto-enabled)
+        if (param.mapping.IsCVSource()) {
+            RenderSubmenuLine("Plugged", "Yes",
+                             line, menu.submenu_selected_item == 1,
+                             false);  // Not editable
+        }
         
         hw_->display.Update();
     }
@@ -163,25 +181,41 @@ public:
             line += 13;
         }
         
-        // Item 2: Attenuverter (only if CV or CC mapped)
+        // Item 2: Plugged (only if CV mapped)
+        if (param.mapping.IsCVSource()) {
+            if (param.mapping.plugged) {
+                int offset_int = (int)(param.mapping.offset * 100.0f);
+                int whole = offset_int / 100;
+                int frac = offset_int % 100;
+                snprintf(buffer, sizeof(buffer), "Yes %d.%02d", whole, frac);
+            } else {
+                snprintf(buffer, sizeof(buffer), "No");
+            }
+            RenderSubmenuLine("Plugged", buffer,
+                             line, menu.submenu_selected_item == 2,
+                             false);  // Not editable, toggled on short press
+            line += 13;
+        }
+        
+        // Item 3: Attenuverter (only if CV or CC mapped)
         if (param.mapping.IsCVSource() || param.mapping.source == MappingSource::CC) {
             snprintf(buffer, sizeof(buffer), "%+d%%", (int)(param.mapping.attenuverter * 100.0f));
             RenderSubmenuLine("Atten", buffer,
-                             line, menu.submenu_selected_item == 2,
-                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 2);
+                             line, menu.submenu_selected_item == 3,
+                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 3);
             line += 13;
         }
         
         // Gate-specific items
         if (param.mapping.IsGateSource()) {
-            // Item 3: Trigger
+            // Item 4: Trigger
             static const char* trigger_names[] = {"Rise", "Fall", "Both"};
             RenderSubmenuLine("Trigger", trigger_names[static_cast<int>(param.mapping.trigger)],
-                             line, menu.submenu_selected_item == 3,
-                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 3);
+                             line, menu.submenu_selected_item == 4,
+                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 4);
             line += 13;
             
-            // Item 4: Action - show valid actions based on trigger mode
+            // Item 5: Action - show valid actions based on trigger mode
             const char* action_str;
             if (param.mapping.trigger == TriggerMode::RISE_AND_FALL) {
                 static const char* action_names_both[] = {"++", "--", "+-", "-+"};
@@ -193,8 +227,8 @@ public:
                 action_str = action_names_single[action_idx];
             }
             RenderSubmenuLine("Action", action_str,
-                             line, menu.submenu_selected_item == 4,
-                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 4);
+                             line, menu.submenu_selected_item == 5,
+                             menu.state == UIState::SubmenuEdit && menu.submenu_selected_item == 5);
         }
         
         hw_->display.Update();
@@ -283,6 +317,10 @@ private:
         int name_len = strlen(buffer);
         hw_->display.WriteString(buffer, Font_7x10, true);
         
+        // Mapping indicator right after name (no white background)
+        int indicator_x = name_len * 7;
+        RenderMappingIndicator(param, y, indicator_x);
+        
         // Underline if selected
         if (selected) {
             hw_->display.DrawLine(0, y + 11, name_len * 7 - 1, y + 11, true);
@@ -303,9 +341,6 @@ private:
             
             hw_->display.SetCursor(76, y + 2);
             hw_->display.WriteString(buffer, Font_7x10, !editing);
-            
-            // Mapping indicator
-            RenderMappingIndicator(param, y, 76 + value_width + 7);
         }
         
         // Submenu indicator
@@ -318,16 +353,9 @@ private:
     void RenderMappingIndicator(const Parameter& param, int y, int x) {
         if (param.mapping.source == MappingSource::NONE) return;
         
-        // Use simple '*' indicator to avoid overflow with long values
-        // Position at fixed location before submenu indicator
-        int indicator_x = 114;  // Fixed position, leaves room for '>'
-        
-        hw_->display.DrawLine(indicator_x, y + 1, indicator_x + 6, y + 1, true);
-        hw_->display.DrawLine(indicator_x, y + 12, indicator_x + 6, y + 12, true);
-        hw_->display.DrawRect(indicator_x, y + 2, 7, 10, true, true);
-        
-        hw_->display.SetCursor(indicator_x, y + 2);
-        hw_->display.WriteString("*", Font_7x10, false);
+        // Simple '*' indicator right after parameter name (no white background)
+        hw_->display.SetCursor(x, y + 1);
+        hw_->display.WriteString("*", Font_7x10, true);
     }
     
     void FormatValue(const Parameter& param, char* buffer, size_t size) {

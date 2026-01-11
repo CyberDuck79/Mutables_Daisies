@@ -100,9 +100,9 @@ struct MenuState {
             case ParamType::KNOB:
                 return 5;  // Mapping, CCNumber, Plugged, Attenuverter, Velocity
             case ParamType::CV:
-                return 1;  // Mapping only
+                return 2;  // Mapping, Plugged (read-only)
             case ParamType::ENUM:
-                return 5;  // Mapping, CCNumber, Attenuverter, Trigger, Action
+                return 6;  // Mapping, CCNumber, Plugged, Attenuverter, Trigger, Action
             default:
                 return 0;
         }
@@ -115,15 +115,22 @@ struct MenuState {
             if (item_index == 1) return mapping.source == MappingSource::CC;
             // Plugged only visible if CV mapped
             if (item_index == 2) return mapping.IsCVSource();
+        } else if (type == ParamType::CV) {
+            // Plugged only visible if CV mapped
+            if (item_index == 1) return mapping.IsCVSource();
+            // Plugged only visible if CV mapped
+            if (item_index == 2) return mapping.IsCVSource();
         } else if (type == ParamType::ENUM) {
             // CCNumber only visible if CC mapped
             if (item_index == 1) return mapping.source == MappingSource::CC;
+            // Plugged only visible if CV mapped
+            if (item_index == 2) return mapping.IsCVSource();
             // Attenuverter only visible if CV or CC mapped
-            if (item_index == 2) return mapping.IsCVSource() || mapping.source == MappingSource::CC;
+            if (item_index == 3) return mapping.IsCVSource() || mapping.source == MappingSource::CC;
             // Trigger only visible if Gate mapped
-            if (item_index == 3) return mapping.IsGateSource();
-            // Action only visible if Gate mapped
             if (item_index == 4) return mapping.IsGateSource();
+            // Action only visible if Gate mapped
+            if (item_index == 5) return mapping.IsGateSource();
         }
         return true;
     }
