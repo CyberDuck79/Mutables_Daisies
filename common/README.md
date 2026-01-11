@@ -205,10 +205,8 @@ Load          >
 
 | Indicator | Meaning |
 |-----------|---------|
-| `[1]`-`[4]` | Mapped to CV 1-4 |
-| `[G1]`-`[G2]` | Mapped to Gate 1-2 |
-| `#` | Mapped to MIDI CC |
-| (empty) | No mapping |
+| `*` | Mapped to Something |
+
 
 ---
 

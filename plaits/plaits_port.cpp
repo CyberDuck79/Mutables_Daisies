@@ -11,6 +11,20 @@ const char* PlaitsPort::bank_names_[] = {
     "New"
 };
 
+// Frequency range names (C0-C8 individual octaves, plus full range)
+const char* PlaitsPort::freq_range_names_[] = {
+    "C0",      // 0: Fixed to C0 (note 12) ±7 semitones
+    "C1",      // 1: Fixed to C1 (note 24) ±7 semitones
+    "C2",      // 2: Fixed to C2 (note 36) ±7 semitones
+    "C3",      // 3: Fixed to C3 (note 48) ±7 semitones
+    "C4",      // 4: Fixed to C4 (note 60) ±7 semitones
+    "C5",      // 5: Fixed to C5 (note 72) ±7 semitones
+    "C6",      // 6: Fixed to C6 (note 84) ±7 semitones
+    "C7",      // 7: Fixed to C7 (note 96) ±7 semitones
+    "C8",      // 8: Fixed to C8 (note 108) ±7 semitones
+    "C0-C8"    // 9: Full 8-octave range
+};
+
 // Synth engines (indices 8-15 in Plaits)
 const char* PlaitsPort::synth_engine_names_[] = {
     "VA",        // 8: Virtual analog
@@ -54,6 +68,7 @@ PlaitsPort::PlaitsPort()
     , allocator_(nullptr)
     , current_bank_(0)
     , midi_note_(60.0f)
+    , midi_velocity_(0.8f)
     , midi_gate_(false)
     , gate_state_(false)
     , previous_gate_(false)
@@ -132,8 +147,14 @@ void PlaitsPort::SetupParameters() {
     params_[4] = mutables_ui::Parameter::Knob("Morph", 0.0f, 1.0f, 0.5f);
     
     // Transpose/FM - HAS native attenuverter (patch->frequency_modulation_amount)
-    // 0.5 = no transpose, 0.0 = -12 semitones, 1.0 = +12 semitones
-    params_[5] = mutables_ui::Parameter::Knob("Transpose", 0.0f, 1.0f, 0.5f);
+    // Now controlled by Freq. Rng + Frequency knob
+    params_[5] = mutables_ui::Parameter::Knob("Frequency", 0.0f, 1.0f, 0.5f);
+    
+    // Frequency Range - selects octave range for the Frequency knob
+    // C0-C8: individual octaves with ±7 semitone fine tuning
+    // C0-C8 (full): full 8-octave range
+    params_[9] = mutables_ui::Parameter::Enum("Freq. Rng", freq_range_names_, kNumFreqRanges);
+    params_[9].SetIndex(4);  // Default to C4 (middle C)
     
     // LPG Color - NO native attenuverter, we handle it
     params_[6] = mutables_ui::Parameter::Knob("LPG Color", 0.0f, 1.0f, 0.5f);
@@ -189,31 +210,74 @@ void PlaitsPort::UpdatePatchFromParams() {
     int engine_in_bank = params_[1].GetIndex();
     patch_->engine = GetActualEngineIndex(bank, engine_in_bank);
     
-    // MIDI note + transpose (0.5 = no transpose, 0.0 = -12, 1.0 = +12)
-    float transpose_semitones = (params_[5].value - 0.5f) * 24.0f;  // +-12 semitones
-    patch_->note = midi_note_ + transpose_semitones;
+    // ==========================================================================
+    // FREQUENCY CALCULATION (matching original Plaits behavior)
+    // ==========================================================================
+    // Original Plaits:
+    // - FREQUENCY knob sets base note within the selected octave range
+    // - V/Oct CV is ADDED to this base note by the voice engine
+    // 
+    // Our implementation:
+    // - Freq. Rng selects the octave range (C0-C8 or full)
+    // - Frequency knob sets fine tuning (±7 semitones in Cn mode)
+    // - MIDI note acts as V/Oct: added to base note as offset from C4 (note 60)
+    // ==========================================================================
+    
+    int freq_range = params_[9].GetIndex();  // 0-8 = C0-C8, 9 = full range
+    float frequency_knob = params_[5].value;
+    
+    float base_note;
+    if (freq_range == 9) {
+        // Full C0-C8 range: knob sweeps entire range (notes 12-108)
+        base_note = 60.0f + (frequency_knob - 0.5f) * 96.0f;  // C0=12 to C8=108, centered on C4
+    } else {
+        // Fixed octave with ±7 semitone fine tuning
+        // C0=note 12, C1=24, ..., C8=108
+        float octave_note = static_cast<float>((freq_range + 1) * 12);  // +1 because C0=12
+        float fine_tune = (frequency_knob - 0.5f) * 14.0f;  // ±7 semitones
+        base_note = octave_note + fine_tune;
+    }
+    
+    // MIDI note acts as V/Oct offset from C4 (middle C = note 60)
+    // When MIDI note 60 is received, it adds 0 to base_note
+    // MIDI note 72 adds +12 (one octave up), MIDI note 48 adds -12 (one octave down)
+    float voct_offset = midi_note_ - 60.0f;
+    
+    patch_->note = base_note + voct_offset;
     
     // For parameters with CV mapping: use offset as base value when plugged
     // This lets Plaits add the CV modulation on top
     auto& harmonics = params_[2];
     auto& timbre = params_[3];
     auto& morph = params_[4];
-    auto& transpose = params_[5];
+    auto& frequency = params_[5];
     
-    patch_->harmonics = harmonics.mapping.plugged ? harmonics.mapping.offset : harmonics.value;
-    patch_->timbre = timbre.mapping.plugged ? timbre.mapping.offset : timbre.value;
-    patch_->morph = morph.mapping.plugged ? morph.mapping.offset : morph.value;
+    // Apply velocity modulation: vel_mod = velocity * velocity_amount
+    // This is applied when USING values, not when storing them (to avoid feedback)
+    float harm_vel = midi_velocity_ * harmonics.mapping.velocity_amount;
+    float timb_vel = midi_velocity_ * timbre.mapping.velocity_amount;
+    float morph_vel = midi_velocity_ * morph.mapping.velocity_amount;
+    float lpg_col_vel = midi_velocity_ * params_[6].mapping.velocity_amount;
+    float lpg_dec_vel = midi_velocity_ * params_[7].mapping.velocity_amount;
+    
+    float harm_base = harmonics.mapping.plugged ? harmonics.mapping.offset : harmonics.value;
+    float timb_base = timbre.mapping.plugged ? timbre.mapping.offset : timbre.value;
+    float morph_base = morph.mapping.plugged ? morph.mapping.offset : morph.value;
+    
+    patch_->harmonics = std::clamp(harm_base + harm_vel, 0.0f, 1.0f);
+    patch_->timbre = std::clamp(timb_base + timb_vel, 0.0f, 1.0f);
+    patch_->morph = std::clamp(morph_base + morph_vel, 0.0f, 1.0f);
     
     // Modulation amounts - use the attenuverter from each parameter's mapping
     // These control internal envelope routing (when unplugged) or external CV scaling (when plugged)
     // CC mapping just replaces the base value, doesn't affect modulation
-    patch_->frequency_modulation_amount = transpose.mapping.attenuverter;
+    patch_->frequency_modulation_amount = frequency.mapping.attenuverter;
     patch_->timbre_modulation_amount = timbre.mapping.attenuverter;
     patch_->morph_modulation_amount = morph.mapping.attenuverter;
     
-    // LPG parameters
-    patch_->lpg_colour = params_[6].value;
-    patch_->decay = params_[7].value;
+    // LPG parameters with velocity modulation
+    patch_->lpg_colour = std::clamp(params_[6].value + lpg_col_vel, 0.0f, 1.0f);
+    patch_->decay = std::clamp(params_[7].value + lpg_dec_vel, 0.0f, 1.0f);
 }
 
 void PlaitsPort::SetCVModulations(float frequency_cv, float timbre_cv, float morph_cv) {
@@ -250,11 +314,11 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         // Patched status - true only when CV is mapped+plugged
         // This tells Plaits whether to use external modulation or internal envelope
         // CC mapping just replaces base value, doesn't count as patched
-        auto& transpose = params_[5];
+        auto& frequency = params_[5];
         auto& timbre = params_[3];
         auto& morph = params_[4];
         
-        modulations_->frequency_patched = transpose.mapping.IsCVSource() && transpose.mapping.plugged;
+        modulations_->frequency_patched = frequency.mapping.IsCVSource() && frequency.mapping.plugged;
         modulations_->timbre_patched = timbre.mapping.IsCVSource() && timbre.mapping.plugged;
         modulations_->morph_patched = morph.mapping.IsCVSource() && morph.mapping.plugged;
         modulations_->trigger_patched = true;  // Always patched via MIDI/Gate
@@ -292,6 +356,7 @@ float PlaitsPort::GetCVOutput(int cv_index) {
 
 void PlaitsPort::NoteOn(uint8_t note, uint8_t velocity) {
     midi_note_ = static_cast<float>(note);
+    midi_velocity_ = static_cast<float>(velocity) / 127.0f;
     midi_gate_ = true;
 }
 

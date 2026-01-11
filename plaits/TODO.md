@@ -1,17 +1,15 @@
 # My notes TODO
 ## Features
-- remove default mapping
-- add mapping submenu
-- let's attenuverter to be set even if there is no mapping -> for default no input plaits behavior (internal envelope mod)
-- for level -> new custom item ? -> cannot be changed with encoder only mapped or not and get value from CV
+- ~~apply velocity mod~~ ✅
 - choose midi channel
-- if level is patched -> count trigger as unplugged
+- check that trigger:
+	- (midi note on) Samples and holds the value of the MODEL CV input (Bank and Engine in our case).
+- save and load presets
 
+- handle custom user data (decoded from /plaits/<engine>/userdata.bin at start)
 
-## midi additional features
-- sustain for envelope (except in drum engines) -> seem already OK but because of no polyphony
-- polyphony on some engines
-- velocity mod lvl in sub menu ? modwheel ? CCs ?
-
-## Other additional features
 - two modulators (CV OUTs) -> envelope copy / LFO (with config submenu ?)
+
+- ployphony for some engines ? I guess this is because there is no envelope ? -> note that if we want to add polyphony -> not on drum ?
+
+- add effects ??

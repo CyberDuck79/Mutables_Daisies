@@ -55,7 +55,7 @@ private:
     uint8_t buffer_[kBufferSize];
     
     // Parameters
-    static constexpr int kNumParams = 9;  // Bank, Engine, Harmonics, Timbre, Morph, Transpose, LPG Color, LPG Decay, Level
+    static constexpr int kNumParams = 10;  // Bank, Engine, Harmonics, Timbre, Morph, Frequency, LPG Color, LPG Decay, Level, Freq Range
     std::array<mutables_ui::Parameter, kNumParams> params_;
     
     // Bank and engine system
@@ -63,15 +63,18 @@ private:
     static const char* synth_engine_names_[];
     static const char* drum_engine_names_[];
     static const char* new_engine_names_[];
+    static const char* freq_range_names_[];
     static constexpr int kNumBanks = 3;
     static constexpr int kNumSynthEngines = 8;
     static constexpr int kNumDrumEngines = 8;
     static constexpr int kNumNewEngines = 8;
+    static constexpr int kNumFreqRanges = 10;  // C0-C8 + full range
     
     int current_bank_;
     
     // MIDI state
     float midi_note_;      // Current MIDI note (0-127)
+    float midi_velocity_;  // Current MIDI velocity (0.0-1.0)
     bool midi_gate_;       // Gate from MIDI note on/off
     
     // State
@@ -88,6 +91,7 @@ public:
     // MIDI interface
     void NoteOn(uint8_t note, uint8_t velocity);
     void NoteOff(uint8_t note, uint8_t velocity);
+    float GetVelocity() const { return midi_velocity_; }
 };
 
 } // namespace mutables_plaits

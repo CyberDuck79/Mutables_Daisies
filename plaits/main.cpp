@@ -183,7 +183,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
                 float cv_signal = cv_value - param.mapping.offset;
                 
                 // Store CV signals for specific parameters that Plaits handles
-                // Transpose (index 5) -> frequency modulation
+                // Frequency (index 5) -> frequency modulation
                 // Timbre (index 3) -> timbre modulation  
                 // Morph (index 4) -> morph modulation
                 if (i == 5) frequency_cv = cv_signal;
@@ -194,10 +194,16 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
             // For display purposes, still update param.value with the full calculation
             float mapped = CalculateMappedValue(param, param.value, cv_inputs);
             param.SetNormalizedWithHysteresis(mapped, 0.001f);
-        } else if (param.type == ParamType::CV && param.mapping.IsCVSource()) {
+        }
+        // Unmapped KNOB parameters: value is set by encoder, don't modify here
+        // Velocity modulation is applied in the module when using the values
+        else if (param.type == ParamType::CV && param.mapping.IsCVSource()) {
             // CV type - direct read from CV input (no attenuverter emulation)
             float cv_value = cv_inputs.GetFiltered(param.mapping.GetCVIndex());
             param.SetNormalizedWithHysteresis(cv_value, 0.001f);
+        } else if (param.type == ParamType::CV && !param.mapping.IsCVSource()) {
+            // CV type with no mapping - set to 0
+            param.SetNormalizedWithHysteresis(0.0f, 0.001f);
         } else if (param.type == ParamType::ENUM && param.mapping.source == MappingSource::CC) {
             // CC control for ENUM - quantized selection from CC value
             float cc_value = cc_values[param.mapping.cc_number];

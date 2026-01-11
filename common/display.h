@@ -198,8 +198,8 @@ public:
             line += 13;
         }
         
-        // Item 3: Attenuverter (only if CV or CC mapped)
-        if (param.mapping.IsCVSource() || param.mapping.source == MappingSource::CC) {
+        // Item 3: Attenuverter (only if CV mapped, not CC - CC directly sets value)
+        if (param.mapping.IsCVSource()) {
             // Controls internal envelope modulation amount
             snprintf(buffer, sizeof(buffer), "%+d%%", (int)(param.mapping.attenuverter * 100.0f));
             RenderSubmenuLine("Atten", buffer,
