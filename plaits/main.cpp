@@ -5,6 +5,7 @@
 #include "../common/ui_state.h"
 #include "../common/cv_input.h"
 #include "../common/display.h"
+#include "../common/preset_manager.h"
 
 using namespace daisy;
 using namespace daisysp;
@@ -21,6 +22,15 @@ PlaitsPort plaits_module;
 MenuState menu;
 Display display;
 CVInputBank cv_inputs;
+
+// SD Card / Presets
+SdmmcHandler sdmmc;
+FatFSInterface fsi;
+PresetManager preset_manager;
+
+// Debug logger
+daisy::Logger<daisy::LOGGER_INTERNAL> logger;
+daisy::Logger<daisy::LOGGER_INTERNAL>* g_logger = &logger;
 
 // Encoder state
 bool encoder_button_last = false;
@@ -345,6 +355,32 @@ void UpdateEncoder() {
                 // Only enter edit mode for editable params
                 if (params[menu.selected_param].IsEditable()) {
                     menu.state = UIState::EditValue;
+                } else if (params[menu.selected_param].type == ParamType::SAVE) {
+                    // Enter preset save mode
+                    if (preset_manager.IsSDAvailable()) {
+                        menu.EnterCharInput();
+                    } else {
+                        // Show error - no SD card
+                        display.RenderMessage("Error", "No SD Card");
+                        hw.display.Update();
+                        System::Delay(1500);
+                    }
+                } else if (params[menu.selected_param].type == ParamType::LOAD) {
+                    // Enter preset load mode
+                    if (preset_manager.IsSDAvailable()) {
+                        int count = preset_manager.ScanPresets();
+                        if (count > 0) {
+                            menu.EnterPresetList(count);
+                        } else {
+                            display.RenderMessage("Error", "No presets");
+                            hw.display.Update();
+                            System::Delay(1500);
+                        }
+                    } else {
+                        display.RenderMessage("Error", "No SD Card");
+                        hw.display.Update();
+                        System::Delay(1500);
+                    }
                 }
             } else if (long_press_detected) {
                 // Enter submenu for params that have one
@@ -504,6 +540,85 @@ void UpdateEncoder() {
             }
             break;
         }
+        
+        case UIState::CharInput: {
+            // Rotate through character set
+            if (encoder_increment > 0) menu.NextChar();
+            if (encoder_increment < 0) menu.PrevChar();
+            
+            if (short_press) {
+                // Confirm character and move to next (or backspace if space)
+                menu.ConfirmChar();
+            }
+            
+            if (long_press_detected) {
+                // Save preset if name is valid
+                if (menu.IsPresetNameValid()) {
+                    // Stop audio during SD write to prevent interrupt contention
+                    hw.StopAudio();
+                    
+                    bool success = preset_manager.SavePreset(
+                        menu.GetPresetName(), 
+                        params, 
+                        plaits_module.GetParameterCount()
+                    );
+                    
+                    // Restart audio
+                    hw.StartAudio(AudioCallback);
+                    
+                    if (success) {
+                        display.RenderMessage("Saved!", menu.GetPresetName());
+                    } else {
+                        display.RenderMessage("Error", "Save failed");
+                    }
+                    hw.display.Update();
+                    System::Delay(1500);
+                }
+                menu.ExitCharInput();
+            }
+            break;
+        }
+        
+        case UIState::PresetList: {
+            // Navigate preset list
+            if (encoder_increment > 0) menu.NextPreset();
+            if (encoder_increment < 0) menu.PrevPreset();
+            
+            if (short_press) {
+                // Load selected preset
+                if (menu.preset_count > 0) {
+                    const char* preset_name = preset_manager.GetPresetName(menu.GetSelectedPreset());
+                    if (preset_name) {
+                        // Stop audio during SD read to prevent interrupt contention
+                        hw.StopAudio();
+                        
+                        bool success = preset_manager.LoadPreset(
+                            preset_name,
+                            params,
+                            plaits_module.GetParameterCount()
+                        );
+                        
+                        // Restart audio
+                        hw.StartAudio(AudioCallback);
+                        
+                        if (success) {
+                            display.RenderMessage("Loaded!", preset_name);
+                        } else {
+                            display.RenderMessage("Error", "Load failed");
+                        }
+                        hw.display.Update();
+                        System::Delay(1500);
+                    }
+                }
+                menu.ExitPresetList();
+            }
+            
+            if (long_press_detected) {
+                // Exit without loading
+                menu.ExitPresetList();
+            }
+            break;
+        }
     }
 }
 
@@ -557,10 +672,19 @@ void ProcessMidi() {
     }
 }
 
+// Helper function for preset list display
+const char* GetPresetNameCallback(int index) {
+    return preset_manager.GetPresetName(index);
+}
+
 void UpdateDisplay() {
     auto params = plaits_module.GetParameters();
     
-    if (menu.IsInSubmenu() && menu.submenu_param_index >= 0) {
+    if (menu.state == UIState::CharInput) {
+        display.RenderCharInput(menu);
+    } else if (menu.state == UIState::PresetList) {
+        display.RenderPresetList(menu, GetPresetNameCallback);
+    } else if (menu.IsInSubmenu() && menu.submenu_param_index >= 0) {
         display.RenderSubmenu(menu, params[menu.submenu_param_index]);
     } else {
         display.RenderMenu(menu, params);
@@ -572,7 +696,32 @@ int main(void) {
     hw.SetAudioBlockSize(24);
     hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);
     
+    // Initialize USB serial logger for debug
+    logger.StartLog(false);  // Don't wait for PC
+    logger.PrintLine("Plaits starting...");
+    
+    // Initialize SD card - using polling mode in sd_diskio.c (DMA callbacks broken)
+    {
+        SdmmcHandler::Config sd_cfg;
+        sd_cfg.Defaults();  // FAST speed, 4-bit mode work fine with polling
+        sdmmc.Init(sd_cfg);
+        
+        fsi.Init(FatFSInterface::Config::MEDIA_SD);
+        System::Delay(50);
+        
+        FRESULT fr = f_mount(&fsi.GetSDFileSystem(), "/", 1);
+        if (fr == FR_OK) {
+            logger.PrintLine("SD: Ready");
+        } else {
+            logger.PrintLine("SD: Mount failed (%d)", (int)fr);
+        }
+    }
+    
     plaits_module.Init(48000.0f);
+    
+    // Initialize preset manager
+    preset_manager.Init(sdmmc, fsi, plaits_module.GetShortName());
+    logger.PrintLine("Preset manager initialized");
     
     menu.param_count = plaits_module.GetParameterCount();
     display.Init(&hw);

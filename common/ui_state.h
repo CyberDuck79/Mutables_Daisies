@@ -9,7 +9,9 @@ enum class UIState {
     Navigate,       // Encoder rotation scrolls parameters
     EditValue,      // Encoder rotation changes value
     Submenu,        // In submenu (Navigate mode)
-    SubmenuEdit     // Editing submenu values
+    SubmenuEdit,    // Editing submenu values
+    CharInput,      // Typing preset name for Save
+    PresetList      // Browsing presets for Load
 };
 
 // Submenu items for KNOB type (no Back - long press to exit)
@@ -50,6 +52,21 @@ struct MenuState {
     Parameter* sub_parent;        // Non-null if browsing SUB children
     int sub_child_selected;       // Selected child in SUB
     
+    // For preset Save (CharInput state)
+    static constexpr int MAX_PRESET_NAME_LEN = 16;
+    char preset_name[MAX_PRESET_NAME_LEN + 1];  // Current name being typed
+    int char_position;                          // Current cursor position (0-15)
+    int char_index;                             // Index in character set for current position
+    
+    // For preset Load (PresetList state)
+    int preset_selected;          // Selected preset in list
+    int preset_scroll_offset;     // Scroll offset for preset list
+    int preset_count;             // Total presets found
+    
+    // Character set for name input
+    static constexpr const char* kCharSet = "abcdefghijklmnopqrstuvwxyz0123456789-_. ";
+    static constexpr int kCharSetSize = 40;
+    
     // Display settings
     static constexpr int VISIBLE_PARAMS = 4;
     static constexpr int VISIBLE_SUBMENU_ITEMS = 4;
@@ -63,7 +80,14 @@ struct MenuState {
         , submenu_selected_item(0)
         , submenu_scroll_offset(0)
         , sub_parent(nullptr)
-        , sub_child_selected(0) {}
+        , sub_child_selected(0)
+        , char_position(0)
+        , char_index(0)
+        , preset_selected(0)
+        , preset_scroll_offset(0)
+        , preset_count(0) {
+        preset_name[0] = '\0';
+    }
     
     void ScrollToSelected() {
         if (selected_param < scroll_offset) {
@@ -228,6 +252,131 @@ struct MenuState {
     
     bool IsInSub() const {
         return sub_parent != nullptr;
+    }
+    
+    // === Preset Save (CharInput) Methods ===
+    
+    // Enter character input mode for preset save
+    void EnterCharInput() {
+        state = UIState::CharInput;
+        preset_name[0] = '\0';
+        char_position = 0;
+        char_index = 0;  // Start at 'a'
+    }
+    
+    // Rotate through character set
+    void NextChar() {
+        char_index = (char_index + 1) % kCharSetSize;
+    }
+    
+    void PrevChar() {
+        char_index = (char_index - 1 + kCharSetSize) % kCharSetSize;
+    }
+    
+    // Get current character being selected
+    char GetCurrentChar() const {
+        return kCharSet[char_index];
+    }
+    
+    // Confirm current character and move to next position
+    // Returns true if still editing, false if name complete (at max length)
+    bool ConfirmChar() {
+        char c = GetCurrentChar();
+        
+        if (c == ' ' && char_position > 0) {
+            // Space at non-first position = backspace
+            char_position--;
+            preset_name[char_position] = '\0';
+            // Set char_index to match the character we're now on (or 'a' if empty)
+            if (char_position > 0) {
+                // Find the index of the previous character
+                for (int i = 0; i < kCharSetSize; i++) {
+                    if (kCharSet[i] == preset_name[char_position - 1]) {
+                        char_index = i;
+                        break;
+                    }
+                }
+            } else {
+                char_index = 0;
+            }
+            return true;
+        }
+        
+        if (c == ' ' && char_position == 0) {
+            // Space at first position = exit without saving
+            ExitCharInput();
+            return false;
+        }
+        
+        // Add character
+        if (char_position < MAX_PRESET_NAME_LEN) {
+            preset_name[char_position] = c;
+            char_position++;
+            preset_name[char_position] = '\0';
+            char_index = 0;  // Reset to 'a' for next char
+        }
+        
+        return char_position < MAX_PRESET_NAME_LEN;
+    }
+    
+    // Exit character input (back to Navigate)
+    void ExitCharInput() {
+        state = UIState::Navigate;
+        char_position = 0;
+        preset_name[0] = '\0';
+    }
+    
+    // Check if preset name is valid (non-empty)
+    bool IsPresetNameValid() const {
+        return char_position > 0;
+    }
+    
+    // Get the current preset name
+    const char* GetPresetName() const {
+        return preset_name;
+    }
+    
+    // === Preset Load (PresetList) Methods ===
+    
+    // Enter preset list mode
+    void EnterPresetList(int count) {
+        state = UIState::PresetList;
+        preset_count = count;
+        preset_selected = 0;
+        preset_scroll_offset = 0;
+    }
+    
+    // Navigate preset list
+    void NextPreset() {
+        if (preset_count == 0) return;
+        preset_selected = (preset_selected + 1) % preset_count;
+        ScrollPresetToSelected();
+    }
+    
+    void PrevPreset() {
+        if (preset_count == 0) return;
+        preset_selected = (preset_selected - 1 + preset_count) % preset_count;
+        ScrollPresetToSelected();
+    }
+    
+    void ScrollPresetToSelected() {
+        if (preset_selected < preset_scroll_offset) {
+            preset_scroll_offset = preset_selected;
+        } else if (preset_selected >= preset_scroll_offset + VISIBLE_PARAMS) {
+            preset_scroll_offset = preset_selected - VISIBLE_PARAMS + 1;
+        }
+    }
+    
+    // Exit preset list (back to Navigate)
+    void ExitPresetList() {
+        state = UIState::Navigate;
+        preset_selected = 0;
+        preset_count = 0;
+    }
+    
+    // Get selected preset index
+    int GetSelectedPreset() const {
+        return preset_selected;
     }
 };
 

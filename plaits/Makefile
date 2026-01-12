@@ -4,6 +4,9 @@ TARGET = plaits_daisy
 # Sources
 CPP_SOURCES = main.cpp plaits_port.cpp
 
+# Enable FatFS for SD card preset storage
+USE_FATFS = 1
+
 # Plaits DSP sources directory
 PLAITS_DIR = ../eurorack/plaits/dsp
 

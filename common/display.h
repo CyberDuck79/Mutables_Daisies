@@ -259,6 +259,127 @@ public:
         }
     }
     
+    // Render character input screen for preset save
+    void RenderCharInput(const MenuState& menu) {
+        if (!hw_) return;
+        
+        hw_->display.Fill(false);
+        
+        // Title
+        hw_->display.SetCursor(0, 1);
+        hw_->display.WriteString("Save Preset", Font_7x10, true);
+        
+        // Current name with cursor
+        char display_name[20];
+        int name_len = strlen(menu.preset_name);
+        
+        // Build display string with cursor character
+        for (int i = 0; i < MenuState::MAX_PRESET_NAME_LEN; i++) {
+            if (i < name_len) {
+                display_name[i] = menu.preset_name[i];
+            } else if (i == menu.char_position) {
+                display_name[i] = menu.GetCurrentChar();
+            } else {
+                display_name[i] = '_';
+            }
+        }
+        display_name[MenuState::MAX_PRESET_NAME_LEN] = '\0';
+        
+        // Draw name (centered, 2 lines of 8 chars)
+        hw_->display.SetCursor(8, 20);
+        char line1[9];
+        strncpy(line1, display_name, 8);
+        line1[8] = '\0';
+        hw_->display.WriteString(line1, Font_7x10, true);
+        
+        hw_->display.SetCursor(8, 32);
+        char line2[9];
+        strncpy(line2, display_name + 8, 8);
+        line2[8] = '\0';
+        hw_->display.WriteString(line2, Font_7x10, true);
+        
+        // Cursor underline
+        int cursor_row = menu.char_position / 8;
+        int cursor_col = menu.char_position % 8;
+        int cursor_x = 8 + cursor_col * 7;
+        int cursor_y = (cursor_row == 0) ? 31 : 43;
+        hw_->display.DrawLine(cursor_x, cursor_y, cursor_x + 6, cursor_y, true);
+        
+        // Instructions
+        hw_->display.SetCursor(0, 54);
+        hw_->display.WriteString("rot:chr prs:nxt hld:save", Font_6x8, true);
+        
+        hw_->display.Update();
+    }
+    
+    // Render preset list for loading
+    void RenderPresetList(const MenuState& menu, const char* (*getPresetName)(int)) {
+        if (!hw_) return;
+        
+        hw_->display.Fill(false);
+        
+        // Title
+        hw_->display.SetCursor(0, 1);
+        hw_->display.WriteString("Load Preset", Font_7x10, true);
+        
+        if (menu.preset_count == 0) {
+            hw_->display.SetCursor(8, 28);
+            hw_->display.WriteString("No presets", Font_7x10, true);
+        } else {
+            int line = 14;
+            for (int i = 0; i < MenuState::VISIBLE_PARAMS && 
+                        (menu.preset_scroll_offset + i) < menu.preset_count; i++) {
+                int preset_idx = menu.preset_scroll_offset + i;
+                bool selected = (preset_idx == menu.preset_selected);
+                
+                // Selection indicator
+                if (selected) {
+                    hw_->display.SetCursor(0, line);
+                    hw_->display.WriteString(">", Font_7x10, true);
+                }
+                
+                // Preset name
+                const char* name = getPresetName(preset_idx);
+                if (name) {
+                    hw_->display.SetCursor(8, line);
+                    char truncated[17];
+                    strncpy(truncated, name, 16);
+                    truncated[16] = '\0';
+                    hw_->display.WriteString(truncated, Font_7x10, true);
+                }
+                
+                line += 12;
+            }
+        }
+        
+        // Instructions
+        hw_->display.SetCursor(0, 54);
+        hw_->display.WriteString("rot:sel prs:load hld:back", Font_6x8, true);
+        
+        hw_->display.Update();
+    }
+    
+    // Render a temporary message (success/error)
+    void RenderMessage(const char* title, const char* message, bool success = true) {
+        if (!hw_) return;
+        
+        hw_->display.Fill(false);
+        
+        // Title centered
+        int title_len = strlen(title);
+        int title_x = (128 - title_len * 7) / 2;
+        hw_->display.SetCursor(title_x, 20);
+        hw_->display.WriteString(title, Font_7x10, true);
+        
+        // Message centered
+        int msg_len = strlen(message);
+        int msg_x = (128 - msg_len * 7) / 2;
+        hw_->display.SetCursor(msg_x, 36);
+        hw_->display.WriteString(message, Font_7x10, true);
+        
+        hw_->display.Update();
+    }
+    
 private:
     daisy::DaisyPatch* hw_;
     

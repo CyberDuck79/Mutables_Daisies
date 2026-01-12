@@ -174,6 +174,10 @@ void PlaitsPort::SetupParameters() {
     // MIDI Channel - Omni (all) or specific channel 1-16
     params_[11] = mutables_ui::Parameter::Enum("MIDI Ch", midi_channel_names_, kNumMidiChannels);
     params_[11].SetIndex(0);  // Default to Omni
+    
+    // Save/Load presets
+    params_[12] = mutables_ui::Parameter::Save();
+    params_[13] = mutables_ui::Parameter::Load();
 }
 
 void PlaitsPort::UpdateEngineListForBank(int bank) {
