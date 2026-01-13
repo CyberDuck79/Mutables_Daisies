@@ -1,8 +1,6 @@
 # My notes TODO
 ## Features
 
-- save and load presets
-
 - handle custom user data (decoded from /plaits/<engine>/userdata.bin at start)
 
 - add audio ouput functionnality on some engine ?
