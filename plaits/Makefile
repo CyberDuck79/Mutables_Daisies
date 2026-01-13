@@ -2,7 +2,7 @@
 TARGET = plaits_daisy
 
 # Sources
-CPP_SOURCES = main.cpp plaits_port.cpp
+CPP_SOURCES = main.cpp plaits_port.cpp user_data_provider.cpp
 
 # Enable FatFS for SD card preset storage
 USE_FATFS = 1
@@ -71,6 +71,9 @@ C_INCLUDES += \
 	-I. \
 	-I../eurorack \
 	-I../common
+
+# Define PLAITS_DAISY for platform-specific code in eurorack libraries
+C_DEFS += -DPLAITS_DAISY
 
 # Compiler flags for Plaits
 CPP_STANDARD = -std=gnu++17

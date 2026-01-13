@@ -1,6 +1,7 @@
 #include "daisy_patch.h"
 #include "daisysp.h"
 #include "plaits_port.h"
+#include "user_data_manager.h"
 #include "../common/parameter.h"
 #include "../common/ui_state.h"
 #include "../common/cv_input.h"
@@ -23,10 +24,11 @@ MenuState menu;
 Display display;
 CVInputBank cv_inputs;
 
-// SD Card / Presets
+// SD Card / Presets / User Data
 SdmmcHandler sdmmc;
 FatFSInterface fsi;
 PresetManager preset_manager;
+UserDataManager user_data_manager;
 
 // Debug logger
 daisy::Logger<daisy::LOGGER_INTERNAL> logger;
@@ -723,6 +725,15 @@ int main(void) {
     // Initialize preset manager
     preset_manager.Init(sdmmc, fsi, plaits_module.GetShortName());
     logger.PrintLine("Preset manager initialized");
+    
+    // Initialize user data manager and load defaults from SD card
+    user_data_manager.Init(fsi, plaits_module.GetShortName());
+    user_data_manager.CreateDirectories();  // Create dirs if they don't exist
+    int loaded = user_data_manager.LoadDefaults();
+    logger.PrintLine("User data: %d targets loaded", loaded);
+    
+    // Register user data manager as the global provider for Plaits
+    plaits::g_user_data_provider = &user_data_manager;
     
     menu.param_count = plaits_module.GetParameterCount();
     display.Init(&hw);
