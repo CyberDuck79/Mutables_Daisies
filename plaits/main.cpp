@@ -703,11 +703,12 @@ int main(void) {
     // Initialize SD card - using polling mode in sd_diskio.c (DMA callbacks broken)
     {
         SdmmcHandler::Config sd_cfg;
-        sd_cfg.Defaults();  // FAST speed, 4-bit mode work fine with polling
+        sd_cfg.Defaults();
+        sd_cfg.speed = SdmmcHandler::Speed::SLOW;  // Use SLOW for reliable polling mode
         sdmmc.Init(sd_cfg);
         
         fsi.Init(FatFSInterface::Config::MEDIA_SD);
-        System::Delay(50);
+        System::Delay(100);  // Give card time to settle
         
         FRESULT fr = f_mount(&fsi.GetSDFileSystem(), "/", 1);
         if (fr == FR_OK) {

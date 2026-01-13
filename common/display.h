@@ -352,10 +352,6 @@ public:
             }
         }
         
-        // Instructions
-        hw_->display.SetCursor(0, 54);
-        hw_->display.WriteString("rot:sel prs:load hld:back", Font_6x8, true);
-        
         hw_->display.Update();
     }
     

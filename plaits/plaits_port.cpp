@@ -185,7 +185,11 @@ void PlaitsPort::UpdateEngineListForBank(int bank) {
     
     current_bank_ = bank;
     
-    // Reset engine selection to 0 when changing banks
+    // Save the current mapping before recreating the parameter
+    auto saved_mapping = params_[1].mapping;
+    float saved_value = params_[1].value;
+    
+    // Update engine list based on bank
     switch (bank) {
         case 0:  // Synth
             params_[1] = mutables_ui::Parameter::Enum("Engine", synth_engine_names_, kNumSynthEngines);
@@ -197,6 +201,13 @@ void PlaitsPort::UpdateEngineListForBank(int bank) {
             params_[1] = mutables_ui::Parameter::Enum("Engine", new_engine_names_, kNumNewEngines);
             break;
     }
+    
+    // Restore the mapping (preserves CV assignment, etc.)
+    params_[1].mapping = saved_mapping;
+    // Clamp the value to the new valid range
+    if (saved_value < params_[1].min) saved_value = params_[1].min;
+    if (saved_value > params_[1].max) saved_value = params_[1].max;
+    params_[1].value = saved_value;
 }
 
 int PlaitsPort::GetActualEngineIndex(int bank, int engine_in_bank) {

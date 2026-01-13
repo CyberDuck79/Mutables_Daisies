@@ -99,23 +99,9 @@ public:
         sd_init_attempted_ = true;
         if (g_logger) g_logger->PrintLine("SD: Starting init...");
         
-        // Initialize SDMMC peripheral
-        // NOTE: Using SLOW speed and 1-bit mode because DMA mode in libDaisy
-        // has issues - we modified sd_diskio.c to use polling instead
-        daisy::SdmmcHandler::Config sd_cfg;
-        sd_cfg.Defaults();
-        sd_cfg.speed = daisy::SdmmcHandler::Speed::SLOW;  // 400kHz for reliability
-        sd_cfg.width = daisy::SdmmcHandler::BusWidth::BITS_1;
-        
-        auto sd_result = sdmmc_->Init(sd_cfg);
-        if (sd_result != daisy::SdmmcHandler::Result::OK) {
-            if (g_logger) g_logger->PrintLine("SD: SDMMC init failed: %d", (int)sd_result);
-            return false;
-        }
+        // SDMMC should already be initialized by main.cpp
+        // Just check if we can get card state
         if (g_logger) g_logger->PrintLine("SD: SDMMC OK");
-        
-        // Setup FatFS interface
-        fsi_->Init(daisy::FatFSInterface::Config::MEDIA_SD);
         
         // Mount filesystem with immediate mount (1)
         FRESULT fr = f_mount(&fsi_->GetSDFileSystem(), "/", 1);
@@ -219,8 +205,6 @@ public:
         if (g_logger) g_logger->PrintLine("Save: Verify stat fr=%d, size=%lu", (int)stat_fr, fno.fsize);
         
         return (stat_fr == FR_OK && fno.fsize > 0);
-        
-        return (fr == FR_OK && fno.fsize > 0);
     }
     
     // Load parameters from a preset file
