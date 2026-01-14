@@ -290,6 +290,9 @@ public:
             // Skip directories
             if (fno.fattrib & AM_DIR) continue;
             
+            // Skip hidden files (starting with '.')
+            if (fno.fname[0] == '.') continue;
+            
             // Check for .bin extension
             size_t len = strlen(fno.fname);
             if (len < 5) continue;

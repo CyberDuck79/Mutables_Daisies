@@ -439,8 +439,8 @@ void UpdateEncoder() {
                         }
                     }
                     menu.ScrollToSelected();
-                } else if (current_param.HasSubmenu()) {
-                    // Enter submenu for params that have one
+                } else if (current_param.HasMapping()) {
+                    // Enter mapping submenu for params that have one (KNOB, CV, ENUM)
                     menu.EnterSubmenu(menu.selected_param, 
                                      current_param.type,
                                      current_param.mapping);
@@ -886,7 +886,27 @@ int main(void) {
     int loaded = user_data_manager.LoadDefaults();
     logger.PrintLine("User data: %d targets loaded", loaded);
     
+    // Sync user_data_params_ filenames with what was loaded
+    // Find the User Data SUB param and update each child's filename
+    auto params = plaits_module.GetParameters();
+    for (size_t i = 0; i < plaits_module.GetParameterCount(); i++) {
+        if (params[i].type == ParamType::SUB && params[i].children) {
+            for (size_t c = 0; c < params[i].child_count; c++) {
+                auto& child = params[i].children[c];
+                if (child.type == ParamType::USER_DATA) {
+                    UserDataManager::Target target = 
+                        static_cast<UserDataManager::Target>(child.user_data_target);
+                    const char* loaded_file = user_data_manager.GetCurrentFile(target);
+                    if (loaded_file && loaded_file[0]) {
+                        child.SetUserDataFile(loaded_file);
+                    }
+                }
+            }
+        }
+    }
+    
     // Register user data manager as the global provider for Plaits
+    plaits::g_user_data_provider = &user_data_manager;
     plaits::g_user_data_provider = &user_data_manager;
     
     menu.param_count = plaits_module.GetParameterCount();
