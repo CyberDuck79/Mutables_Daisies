@@ -48,6 +48,19 @@ int bank_held_index = 0;
 int engine_held_index = 0;
 bool sample_hold_pending = false;  // Flag set on NoteOn to trigger sampling
 
+// File browser state for USER_DATA selection
+static constexpr int MAX_USER_DATA_FILES = 32;
+static char user_data_files[MAX_USER_DATA_FILES][32];
+static int user_data_file_count = 0;
+
+// Callback for file browser display
+const char* GetUserDataFileNameCallback(int index) {
+    if (index >= 0 && index < user_data_file_count) {
+        return user_data_files[index];
+    }
+    return nullptr;
+}
+
 // Audio buffers
 float* audio_in[4];
 float* audio_out[4];
@@ -349,15 +362,21 @@ void UpdateEncoder() {
     
     // Handle encoder based on state
     switch (menu.state) {
-        case UIState::Navigate:
+        case UIState::Navigate: {
             if (encoder_increment > 0) menu.NextParam();
             if (encoder_increment < 0) menu.PrevParam();
             
+            // Get the currently active parameter array
+            mutables_ui::Parameter* current_params = menu.IsInSub() && menu.sub_parent 
+                ? menu.sub_parent->children 
+                : params;
+            auto& current_param = current_params[menu.selected_param];
+            
             if (short_press) {
                 // Only enter edit mode for editable params
-                if (params[menu.selected_param].IsEditable()) {
+                if (current_param.IsEditable()) {
                     menu.state = UIState::EditValue;
-                } else if (params[menu.selected_param].type == ParamType::SAVE) {
+                } else if (current_param.type == ParamType::SAVE) {
                     // Enter preset save mode
                     if (preset_manager.IsSDAvailable()) {
                         menu.EnterCharInput();
@@ -367,7 +386,7 @@ void UpdateEncoder() {
                         hw.display.Update();
                         System::Delay(1500);
                     }
-                } else if (params[menu.selected_param].type == ParamType::LOAD) {
+                } else if (current_param.type == ParamType::LOAD) {
                     // Enter preset load mode
                     if (preset_manager.IsSDAvailable()) {
                         int count = preset_manager.ScanPresets();
@@ -383,19 +402,59 @@ void UpdateEncoder() {
                         hw.display.Update();
                         System::Delay(1500);
                     }
+                } else if (current_param.type == ParamType::SUB) {
+                    // Enter SUB's children as new menu
+                    if (current_param.children && current_param.child_count > 0) {
+                        menu.EnterSub(&current_param);
+                        menu.param_count = current_param.child_count;
+                        menu.selected_param = 0;
+                        menu.scroll_offset = 0;
+                    }
+                } else if (current_param.type == ParamType::USER_DATA) {
+                    // Enter file browser for user data selection
+                    if (user_data_manager.IsInitialized()) {
+                        // Get the list of .bin files for this target
+                        UserDataManager::Target target = static_cast<UserDataManager::Target>(current_param.user_data_target);
+                        user_data_file_count = user_data_manager.ListFiles(target, user_data_files, MAX_USER_DATA_FILES);
+                        
+                        // Enter file browser mode
+                        menu.EnterFileBrowser(menu.selected_param, user_data_file_count);
+                    } else {
+                        display.RenderMessage("Error", "No SD Card");
+                        hw.display.Update();
+                        System::Delay(1500);
+                    }
                 }
             } else if (long_press_detected) {
-                // Enter submenu for params that have one
-                if (params[menu.selected_param].HasSubmenu()) {
+                if (menu.IsInSub()) {
+                    // Exit SUB back to root menu
+                    menu.ExitSub();
+                    menu.param_count = plaits_module.GetParameterCount();
+                    // Keep selected_param pointing to the SUB we just exited
+                    // Find the SUB index
+                    for (int i = 0; i < (int)plaits_module.GetParameterCount(); i++) {
+                        if (params[i].type == ParamType::SUB) {
+                            menu.selected_param = i;
+                            break;
+                        }
+                    }
+                    menu.ScrollToSelected();
+                } else if (current_param.HasSubmenu()) {
+                    // Enter submenu for params that have one
                     menu.EnterSubmenu(menu.selected_param, 
-                                     params[menu.selected_param].type,
-                                     params[menu.selected_param].mapping);
+                                     current_param.type,
+                                     current_param.mapping);
                 }
             }
             break;
+        }
             
         case UIState::EditValue: {
-            auto& param = params[menu.selected_param];
+            // Get the currently active parameter array
+            mutables_ui::Parameter* current_params = menu.IsInSub() && menu.sub_parent 
+                ? menu.sub_parent->children 
+                : params;
+            auto& param = current_params[menu.selected_param];
             
             if (encoder_increment != 0) {
                 float step = 0.01f;
@@ -600,6 +659,28 @@ void UpdateEncoder() {
                             plaits_module.GetParameterCount()
                         );
                         
+                        // After loading preset, reload user data based on filenames
+                        if (success) {
+                            // Find the User Data SUB param and reload each target
+                            for (size_t i = 0; i < plaits_module.GetParameterCount(); i++) {
+                                if (params[i].type == ParamType::SUB && params[i].children) {
+                                    for (size_t c = 0; c < params[i].child_count; c++) {
+                                        auto& child = params[i].children[c];
+                                        if (child.type == ParamType::USER_DATA) {
+                                            UserDataManager::Target target = 
+                                                static_cast<UserDataManager::Target>(child.user_data_target);
+                                            if (child.user_data_filename[0]) {
+                                                user_data_manager.LoadTarget(target, child.user_data_filename);
+                                            } else {
+                                                user_data_manager.LoadDefaultForTarget(target);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            plaits_module.ReloadUserData();
+                        }
+                        
                         // Restart audio
                         hw.StartAudio(AudioCallback);
                         
@@ -618,6 +699,68 @@ void UpdateEncoder() {
             if (long_press_detected) {
                 // Exit without loading
                 menu.ExitPresetList();
+            }
+            break;
+        }
+        
+        case UIState::FileBrowser: {
+            // Navigate file list
+            if (encoder_increment > 0) menu.NextFile();
+            if (encoder_increment < 0) menu.PrevFile();
+            
+            if (short_press) {
+                // Get the USER_DATA parameter we're editing
+                mutables_ui::Parameter* current_params = menu.IsInSub() && menu.sub_parent 
+                    ? menu.sub_parent->children 
+                    : params;
+                auto& user_data_param = current_params[menu.file_browser_param_idx];
+                
+                if (menu.IsDefaultSelected()) {
+                    // Clear filename to use firmware default
+                    user_data_param.SetUserDataFile("");
+                } else {
+                    // Get selected file name (index - 1 because 0 is Default)
+                    int file_idx = menu.GetSelectedFile() - 1;
+                    if (file_idx >= 0 && file_idx < user_data_file_count) {
+                        user_data_param.SetUserDataFile(user_data_files[file_idx]);
+                    }
+                }
+                
+                // Load the user data file
+                UserDataManager::Target target = static_cast<UserDataManager::Target>(user_data_param.user_data_target);
+                const char* filename = user_data_param.user_data_filename[0] ? user_data_param.user_data_filename : nullptr;
+                
+                // Stop audio during SD read
+                hw.StopAudio();
+                
+                bool success;
+                if (filename) {
+                    success = user_data_manager.LoadTarget(target, filename);
+                } else {
+                    // Load default (no file - use firmware built-in)
+                    success = user_data_manager.LoadDefaultForTarget(target);
+                }
+                
+                // Reload user data in voice
+                plaits_module.ReloadUserData();
+                
+                // Restart audio
+                hw.StartAudio(AudioCallback);
+                
+                if (success) {
+                    display.RenderMessage("Loaded!", filename ? filename : "Default");
+                } else {
+                    display.RenderMessage("Error", "Load failed");
+                }
+                hw.display.Update();
+                System::Delay(1500);
+                
+                menu.ExitFileBrowser();
+            }
+            
+            if (long_press_detected) {
+                // Exit without changing
+                menu.ExitFileBrowser();
             }
             break;
         }
@@ -686,8 +829,19 @@ void UpdateDisplay() {
         display.RenderCharInput(menu);
     } else if (menu.state == UIState::PresetList) {
         display.RenderPresetList(menu, GetPresetNameCallback);
+    } else if (menu.state == UIState::FileBrowser) {
+        // File browser for USER_DATA selection
+        // Get the title from the parameter being edited
+        mutables_ui::Parameter* current_params = menu.IsInSub() && menu.sub_parent 
+            ? menu.sub_parent->children 
+            : params;
+        const char* title = current_params[menu.file_browser_param_idx].name;
+        display.RenderFileBrowser(menu, title, GetUserDataFileNameCallback);
     } else if (menu.IsInSubmenu() && menu.submenu_param_index >= 0) {
         display.RenderSubmenu(menu, params[menu.submenu_param_index]);
+    } else if (menu.IsInSub() && menu.sub_parent) {
+        // Browsing SUB's children
+        display.RenderMenu(menu, menu.sub_parent->children);
     } else {
         display.RenderMenu(menu, params);
     }

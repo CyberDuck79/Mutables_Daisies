@@ -175,9 +175,18 @@ void PlaitsPort::SetupParameters() {
     params_[11] = mutables_ui::Parameter::Enum("MIDI Ch", midi_channel_names_, kNumMidiChannels);
     params_[11].SetIndex(0);  // Default to Omni
     
+    // User Data submenu - allows selecting custom user data files from SD card
+    // Target indices match UserDataManager::Target enum
+    user_data_params_[0] = mutables_ui::Parameter::UserData("6-Op Bk 1", 0);  // TARGET_SIX_OP_1
+    user_data_params_[1] = mutables_ui::Parameter::UserData("6-Op Bk 2", 1);  // TARGET_SIX_OP_2
+    user_data_params_[2] = mutables_ui::Parameter::UserData("6-Op Bk 3", 2);  // TARGET_SIX_OP_3
+    user_data_params_[3] = mutables_ui::Parameter::UserData("WavTerrain", 3); // TARGET_WAVE_TERRAIN
+    user_data_params_[4] = mutables_ui::Parameter::UserData("Wavetable", 4);  // TARGET_WAVETABLE
+    params_[12] = mutables_ui::Parameter::Sub("User Data", user_data_params_.data(), kNumUserDataParams);
+    
     // Save/Load presets
-    params_[12] = mutables_ui::Parameter::Save();
-    params_[13] = mutables_ui::Parameter::Load();
+    params_[13] = mutables_ui::Parameter::Save();
+    params_[14] = mutables_ui::Parameter::Load();
 }
 
 void PlaitsPort::UpdateEngineListForBank(int bank) {
@@ -308,6 +317,12 @@ void PlaitsPort::SetCVModulations(float frequency_cv, float timbre_cv, float mor
     frequency_cv_ = frequency_cv;
     timbre_cv_ = timbre_cv;
     morph_cv_ = morph_cv;
+}
+
+void PlaitsPort::ReloadUserData() {
+    if (voice_) {
+        voice_->ReloadUserData();
+    }
 }
 
 void PlaitsPort::Process(float** in, float** out, size_t size) {

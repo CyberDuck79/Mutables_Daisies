@@ -376,6 +376,54 @@ public:
         hw_->display.Update();
     }
     
+    // Render file browser for USER_DATA selection
+    void RenderFileBrowser(const MenuState& menu, const char* title, const char* (*getFileName)(int)) {
+        if (!hw_) return;
+        
+        hw_->display.Fill(false);
+        
+        // Title (e.g., "6-Op Bank 1")
+        hw_->display.SetCursor(0, 1);
+        char buffer[20];
+        snprintf(buffer, sizeof(buffer), "%.12s", title);
+        hw_->display.WriteString(buffer, Font_7x10, true);
+        
+        int line = 14;
+        int total_items = menu.file_count + 1;  // +1 for "Default" option
+        
+        for (int i = 0; i < MenuState::VISIBLE_PARAMS && 
+                    (menu.file_scroll_offset + i) < total_items; i++) {
+            int item_idx = menu.file_scroll_offset + i;
+            bool selected = (item_idx == menu.file_selected);
+            
+            // Selection indicator
+            if (selected) {
+                hw_->display.SetCursor(0, line);
+                hw_->display.WriteString(">", Font_7x10, true);
+            }
+            
+            // Item name
+            hw_->display.SetCursor(8, line);
+            if (item_idx == 0) {
+                // First item is always "Default" (firmware built-in)
+                hw_->display.WriteString("Default", Font_7x10, true);
+            } else {
+                // Get actual file name (item_idx - 1 because Default is at 0)
+                const char* name = getFileName(item_idx - 1);
+                if (name) {
+                    char truncated[17];
+                    strncpy(truncated, name, 16);
+                    truncated[16] = '\0';
+                    hw_->display.WriteString(truncated, Font_7x10, true);
+                }
+            }
+            
+            line += 12;
+        }
+        
+        hw_->display.Update();
+    }
+    
 private:
     daisy::DaisyPatch* hw_;
     
@@ -484,6 +532,15 @@ private:
                 break;
             case ParamType::MIDI:
                 snprintf(buffer, size, "CH%d", param.GetIndex() + 1);
+                break;
+            case ParamType::USER_DATA:
+                // Show filename (truncated) or "Def" for firmware default
+                if (param.user_data_filename[0] == '\0') {
+                    snprintf(buffer, size, "Def");
+                } else {
+                    // Just show first 5 chars of filename
+                    snprintf(buffer, size, "%.5s", param.user_data_filename);
+                }
                 break;
             case ParamType::CV:
             case ParamType::KNOB:

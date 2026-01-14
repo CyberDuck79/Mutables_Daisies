@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <algorithm>
 
 namespace mutables_ui {
@@ -13,7 +14,8 @@ enum class ParamType {
     MIDI,       // MIDI channel selection (1-16)
     SUB,        // Submenu container
     SAVE,       // Preset save action
-    LOAD        // Preset load action
+    LOAD,       // Preset load action
+    USER_DATA   // User data file selector (shows filename, triggers file browser)
 };
 
 // Mapping source options
@@ -107,6 +109,10 @@ struct Parameter {
     Parameter* children;
     uint8_t child_count;
     
+    // For USER_DATA type
+    uint8_t user_data_target;       // Target index (0-4 for plaits)
+    char user_data_filename[32];    // Current filename or empty for firmware default
+    
     // Default constructor
     Parameter()
         : name("")
@@ -117,7 +123,10 @@ struct Parameter {
         , enum_labels(nullptr)
         , enum_count(0)
         , children(nullptr)
-        , child_count(0) {}
+        , child_count(0)
+        , user_data_target(0) {
+        user_data_filename[0] = '\0';
+    }
     
     // KNOB constructor
     static Parameter Knob(const char* name, float min = 0.0f, float max = 1.0f, float default_value = 0.5f) {
@@ -189,6 +198,36 @@ struct Parameter {
         p.name = "Load";
         p.type = ParamType::LOAD;
         return p;
+    }
+    
+    // USER_DATA constructor
+    static Parameter UserData(const char* name, uint8_t target) {
+        Parameter p;
+        p.name = name;
+        p.type = ParamType::USER_DATA;
+        p.user_data_target = target;
+        p.user_data_filename[0] = '\0';  // Empty = use firmware default
+        return p;
+    }
+    
+    // Set user data filename (or empty string for firmware default)
+    void SetUserDataFile(const char* filename) {
+        if (filename && filename[0]) {
+            strncpy(user_data_filename, filename, sizeof(user_data_filename) - 1);
+            user_data_filename[sizeof(user_data_filename) - 1] = '\0';
+        } else {
+            user_data_filename[0] = '\0';
+        }
+    }
+    
+    // Get display label for user data (filename or "firmware")
+    const char* GetUserDataLabel() const {
+        return user_data_filename[0] ? user_data_filename : "firmware";
+    }
+    
+    // Check if using firmware default
+    bool IsUserDataFirmwareDefault() const {
+        return user_data_filename[0] == '\0';
     }
         
     // Get normalized value (0.0 to 1.0)

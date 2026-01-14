@@ -11,7 +11,8 @@ enum class UIState {
     Submenu,        // In submenu (Navigate mode)
     SubmenuEdit,    // Editing submenu values
     CharInput,      // Typing preset name for Save
-    PresetList      // Browsing presets for Load
+    PresetList,     // Browsing presets for Load
+    FileBrowser     // Browsing files for USER_DATA selection
 };
 
 // Submenu items for KNOB type (no Back - long press to exit)
@@ -63,6 +64,12 @@ struct MenuState {
     int preset_scroll_offset;     // Scroll offset for preset list
     int preset_count;             // Total presets found
     
+    // For file browser (FileBrowser state for USER_DATA)
+    int file_selected;            // Selected file in list
+    int file_scroll_offset;       // Scroll offset for file list
+    int file_count;               // Total files found
+    int file_browser_param_idx;   // Which USER_DATA parameter we're editing
+    
     // Character set for name input
     static constexpr const char* kCharSet = "abcdefghijklmnopqrstuvwxyz0123456789-_. ";
     static constexpr int kCharSetSize = 40;
@@ -85,7 +92,11 @@ struct MenuState {
         , char_index(0)
         , preset_selected(0)
         , preset_scroll_offset(0)
-        , preset_count(0) {
+        , preset_count(0)
+        , file_selected(0)
+        , file_scroll_offset(0)
+        , file_count(0)
+        , file_browser_param_idx(-1) {
         preset_name[0] = '\0';
     }
     
@@ -377,6 +388,55 @@ struct MenuState {
     // Get selected preset index
     int GetSelectedPreset() const {
         return preset_selected;
+    }
+    
+    // === File Browser (for USER_DATA) Methods ===
+    
+    // Enter file browser mode for a USER_DATA parameter
+    void EnterFileBrowser(int param_idx, int count) {
+        state = UIState::FileBrowser;
+        file_browser_param_idx = param_idx;
+        file_count = count;
+        file_selected = 0;  // 0 = "Default" option
+        file_scroll_offset = 0;
+    }
+    
+    // Navigate file list
+    void NextFile() {
+        // file_count includes "Default" option at index 0
+        file_selected = (file_selected + 1) % (file_count + 1);  // +1 for Default option
+        ScrollFileToSelected();
+    }
+    
+    void PrevFile() {
+        file_selected = (file_selected - 1 + file_count + 1) % (file_count + 1);
+        ScrollFileToSelected();
+    }
+    
+    void ScrollFileToSelected() {
+        if (file_selected < file_scroll_offset) {
+            file_scroll_offset = file_selected;
+        } else if (file_selected >= file_scroll_offset + VISIBLE_PARAMS) {
+            file_scroll_offset = file_selected - VISIBLE_PARAMS + 1;
+        }
+    }
+    
+    // Exit file browser (back to Navigate)
+    void ExitFileBrowser() {
+        state = UIState::Navigate;
+        file_browser_param_idx = -1;
+        file_selected = 0;
+        file_count = 0;
+    }
+    
+    // Get selected file index (0 = Default, 1+ = actual file indices)
+    int GetSelectedFile() const {
+        return file_selected;
+    }
+    
+    // Check if "Default" is selected
+    bool IsDefaultSelected() const {
+        return file_selected == 0;
     }
 };
 

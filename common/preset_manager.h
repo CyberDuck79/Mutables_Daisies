@@ -13,7 +13,7 @@ namespace mutables_ui {
 
 // Preset file format constants
 static constexpr uint32_t PRESET_MAGIC = 0x4D495044;  // "MIPD" - Mutable Instruments Patch Daisy
-static constexpr uint16_t PRESET_VERSION = 1;
+static constexpr uint16_t PRESET_VERSION = 2;         // Version 2 adds user_data_filename
 static constexpr size_t MAX_PRESET_NAME = 16;
 static constexpr size_t MAX_PRESETS = 99;             // Practical limit for embedded RAM
 static constexpr size_t MAX_PARAMS = 32;
@@ -35,7 +35,8 @@ struct MappingData {
 struct ParameterData {
     float value;
     MappingData mapping;
-};  // 24 bytes
+    char user_data_filename[32];  // For USER_DATA params (empty = firmware default)
+};  // 56 bytes
 
 // Preset file header
 struct PresetHeader {
@@ -146,9 +147,15 @@ public:
         snprintf(filepath, sizeof(filepath), "%s/%s.bin", preset_dir_, preset_name);
         if (g_logger) g_logger->PrintLine("Save: Path=%s", filepath);
         
-        // Create a single contiguous buffer for all data (like official example uses stack)
-        // Total size: header (16) + params (24 * count)
-        size_t actual_count = (param_count > MAX_PARAMS) ? MAX_PARAMS : param_count;
+        // Count total params including SUB children
+        size_t total_params = 0;
+        for (size_t i = 0; i < param_count && total_params < MAX_PARAMS; i++) {
+            total_params++;
+            if (params[i].type == ParamType::SUB && params[i].children) {
+                total_params += params[i].child_count;
+            }
+        }
+        size_t actual_count = (total_params > MAX_PARAMS) ? MAX_PARAMS : total_params;
         size_t total_size = sizeof(PresetHeader) + actual_count * sizeof(ParameterData);
         
         // Use a static buffer in DMA-safe memory
@@ -164,12 +171,27 @@ public:
         // Fill params after header and calculate checksum
         ParameterData* param_data = reinterpret_cast<ParameterData*>(write_buffer + sizeof(PresetHeader));
         uint32_t checksum = 0;
+        size_t data_idx = 0;
         
-        for (size_t i = 0; i < actual_count; i++) {
-            SerializeParameter(params[i], param_data[i]);
-            const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&param_data[i]);
+        for (size_t i = 0; i < param_count && data_idx < actual_count; i++) {
+            // Serialize the param itself
+            SerializeParameter(params[i], param_data[data_idx]);
+            const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&param_data[data_idx]);
             for (size_t j = 0; j < sizeof(ParameterData); j++) {
                 checksum += bytes[j];
+            }
+            data_idx++;
+            
+            // If SUB, also serialize children
+            if (params[i].type == ParamType::SUB && params[i].children) {
+                for (size_t c = 0; c < params[i].child_count && data_idx < actual_count; c++) {
+                    SerializeParameter(params[i].children[c], param_data[data_idx]);
+                    bytes = reinterpret_cast<const uint8_t*>(&param_data[data_idx]);
+                    for (size_t j = 0; j < sizeof(ParameterData); j++) {
+                        checksum += bytes[j];
+                    }
+                    data_idx++;
+                }
             }
         }
         header->checksum = checksum;
@@ -266,43 +288,71 @@ public:
             return false;
         }
         
-        // Read parameters (up to what we have)
-        uint32_t checksum = 0;
-        size_t params_to_read = (header.param_count < param_count) ? header.param_count : param_count;
-        if (g_logger) g_logger->PrintLine("Load: Reading %u params (file has %u, we need %u)", 
-                                          (unsigned)params_to_read, header.param_count, (unsigned)param_count);
+        // Determine ParameterData size based on version
+        // Version 1: 24 bytes (no user_data_filename)
+        // Version 2: 56 bytes (with user_data_filename)
+        size_t param_data_size = (header.version >= 2) ? sizeof(ParameterData) : 24;
+        bool has_user_data_filename = (header.version >= 2);
         
-        for (size_t i = 0; i < params_to_read; i++) {
-            ParameterData pd;
-            fr = f_read(&file, &pd, sizeof(ParameterData), &bytes_read);
-            if (fr != FR_OK || bytes_read != sizeof(ParameterData)) {
+        // Read parameters (need to match the order we saved)
+        // We iterate through params, and when we hit a SUB, read its children too
+        uint32_t checksum = 0;
+        size_t file_idx = 0;  // Index in file's param data
+        
+        if (g_logger) g_logger->PrintLine("Load: Reading params (file has %u, version %u)", 
+                                          header.param_count, header.version);
+        
+        for (size_t i = 0; i < param_count && file_idx < header.param_count; i++) {
+            ParameterData pd = {};  // Zero initialize for v1 compatibility
+            fr = f_read(&file, &pd, param_data_size, &bytes_read);
+            if (fr != FR_OK || bytes_read != param_data_size) {
                 if (g_logger) g_logger->PrintLine("Load: Param %u read failed", (unsigned)i);
                 f_close(&file);
                 return false;
             }
             
-            // Add to checksum verification
+            // Add to checksum verification (only for bytes actually read)
             const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&pd);
-            for (size_t j = 0; j < sizeof(ParameterData); j++) {
+            for (size_t j = 0; j < param_data_size; j++) {
                 checksum += bytes[j];
             }
             
             // Deserialize into parameter (preserve type and name)
-            DeserializeParameter(pd, params[i]);
-            if (g_logger && i < 3) {
-                g_logger->PrintLine("Load: Param[%u] value=%.3f", (unsigned)i, pd.value);
+            DeserializeParameter(pd, params[i], has_user_data_filename);
+            file_idx++;
+            
+            // If SUB, also read children (version 2+ only has SUB with children)
+            if (params[i].type == ParamType::SUB && params[i].children && header.version >= 2) {
+                for (size_t c = 0; c < params[i].child_count && file_idx < header.param_count; c++) {
+                    pd = {};  // Reset for next read
+                    fr = f_read(&file, &pd, param_data_size, &bytes_read);
+                    if (fr != FR_OK || bytes_read != param_data_size) {
+                        if (g_logger) g_logger->PrintLine("Load: SUB child %u read failed", (unsigned)c);
+                        f_close(&file);
+                        return false;
+                    }
+                    
+                    bytes = reinterpret_cast<const uint8_t*>(&pd);
+                    for (size_t j = 0; j < param_data_size; j++) {
+                        checksum += bytes[j];
+                    }
+                    
+                    DeserializeParameter(pd, params[i].children[c], has_user_data_filename);
+                    file_idx++;
+                }
             }
         }
         if (g_logger) g_logger->PrintLine("Load: Computed checksum=0x%08X (expected=0x%08X)", checksum, header.checksum);
         
         // Skip any extra parameters in file (newer preset with more params)
-        for (size_t i = params_to_read; i < header.param_count; i++) {
+        while (file_idx < header.param_count) {
             ParameterData pd;
-            f_read(&file, &pd, sizeof(ParameterData), &bytes_read);
+            f_read(&file, &pd, param_data_size, &bytes_read);
             const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&pd);
-            for (size_t j = 0; j < sizeof(ParameterData); j++) {
+            for (size_t j = 0; j < param_data_size; j++) {
                 checksum += bytes[j];
             }
+            file_idx++;
         }
         
         f_close(&file);
@@ -417,10 +467,18 @@ private:
         data.mapping.padding[0] = 0;
         data.mapping.padding[1] = 0;
         data.mapping.padding[2] = 0;
+        
+        // USER_DATA filename
+        if (param.type == ParamType::USER_DATA) {
+            strncpy(data.user_data_filename, param.user_data_filename, sizeof(data.user_data_filename) - 1);
+            data.user_data_filename[sizeof(data.user_data_filename) - 1] = '\0';
+        } else {
+            data.user_data_filename[0] = '\0';
+        }
     }
     
     // Deserialize binary format to parameter (preserves type, name, enum_labels)
-    void DeserializeParameter(const ParameterData& data, Parameter& param) {
+    void DeserializeParameter(const ParameterData& data, Parameter& param, bool has_user_data = true) {
         param.value = data.value;
         
         // Clamp value to valid range
@@ -439,6 +497,12 @@ private:
         // Reset runtime state that shouldn't be persisted
         param.mapping.last_gate_state = false;
         param.mapping.toggle_state = false;
+        
+        // USER_DATA filename (only for version 2+)
+        if (param.type == ParamType::USER_DATA && has_user_data) {
+            strncpy(param.user_data_filename, data.user_data_filename, sizeof(param.user_data_filename) - 1);
+            param.user_data_filename[sizeof(param.user_data_filename) - 1] = '\0';
+        }
     }
 };
 

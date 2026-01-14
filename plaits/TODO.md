@@ -7,7 +7,7 @@
 
 - two modulators (CV OUTs) -> envelope copy / LFO (with config submenu ?)
 
-- add true FM from audio input ?
+- what is the rate of our CV inputs ? are they compatible with audio rate ?
 
 - ployphony for some engines ? I guess this is because there is no envelope ? -> note that if we want to add polyphony -> not on drum ?
 

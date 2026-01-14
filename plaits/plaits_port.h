@@ -37,6 +37,9 @@ public:
     // Set CV modulation values (called from main before Process)
     void SetCVModulations(float frequency_cv, float timbre_cv, float morph_cv);
     
+    // Reload user data after file change (call voice_->ReloadUserData())
+    void ReloadUserData();
+    
 private:
     // Plaits engine
     plaits::Voice* voice_;
@@ -55,8 +58,10 @@ private:
     uint8_t buffer_[kBufferSize];
     
     // Parameters
-    static constexpr int kNumParams = 14;  // Bank, Engine, Freq.Rng, Frequency, Harmonics, Timbre, Morph, Level, LPG Color, LPG Decay, Volume, MIDI Ch, Save, Load
+    static constexpr int kNumParams = 15;  // Bank, Engine, Freq.Rng, Frequency, Harmonics, Timbre, Morph, Level, LPG Color, LPG Decay, Volume, MIDI Ch, User Data (SUB), Save, Load
+    static constexpr int kNumUserDataParams = 5;  // 3 FM banks + wavetable + wave terrain
     std::array<mutables_ui::Parameter, kNumParams> params_;
+    std::array<mutables_ui::Parameter, kNumUserDataParams> user_data_params_;  // Children of User Data submenu
     
     // Bank and engine system
     static const char* bank_names_[];

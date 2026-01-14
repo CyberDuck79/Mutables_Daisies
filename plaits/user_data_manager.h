@@ -94,6 +94,13 @@ public:
     }
     
     /**
+     * Check if manager is initialized and ready
+     */
+    bool IsInitialized() const {
+        return initialized_;
+    }
+    
+    /**
      * Load default user data for all targets
      * Call this at startup after Init()
      * If default.bin doesn't exist for a target, firmware built-in data is used
@@ -192,6 +199,27 @@ public:
     bool LoadForSlot(int slot, const char* filename) {
         if (!SlotHasUserData(slot)) return false;
         return LoadTarget(SlotToTarget(slot), filename);
+    }
+    
+    /**
+     * Clear loaded data for a target, reverting to firmware defaults
+     * @param target The target to clear
+     * @return true (always succeeds)
+     */
+    bool LoadDefaultForTarget(Target target) {
+        if (target >= NUM_TARGETS) return false;
+        
+        // Clear the loaded flag so ptr() returns nullptr
+        // This causes voice.cc to use built-in firmware data
+        loaded_[target] = false;
+        current_file_[target][0] = '\0';
+        
+        if (g_logger) {
+            g_logger->PrintLine("UserData: Cleared %s (using firmware default)", 
+                               GetTargetDirName(target));
+        }
+        
+        return true;
     }
     
     /**
