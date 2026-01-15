@@ -87,12 +87,13 @@ static const char* lfo_shape_names[] = {
 };
 static constexpr int kNumLFOShapes = 6;
 
-// Clock sync on/off
+// Clock sync modes
 static const char* sync_names[] = {
     "Free",
-    "MIDI"
+    "MIDI",
+    "Gate2"
 };
-static constexpr int kNumSyncModes = 2;
+static constexpr int kNumSyncModes = 3;
 
 // Clock ratio names for display when MIDI sync is enabled
 static const char* clock_ratio_names[] = {
@@ -188,9 +189,9 @@ static void CVOutFormatCallback(const mutables_ui::Parameter* param,
             break;
             
         case CVOUT_RATE:
-            // Check if MIDI sync is enabled
-            if (sibling_count > CVOUT_SYNC && siblings[CVOUT_SYNC].GetIndex() == 1) {
-                // MIDI sync mode: show ratio name
+            // Check if MIDI or Gate2 sync is enabled (index 1 or 2)
+            if (sibling_count > CVOUT_SYNC && siblings[CVOUT_SYNC].GetIndex() >= 1) {
+                // Clock sync mode: show ratio name
                 int ratio_idx = static_cast<int>(value * (kNumClockRatios - 1) + 0.5f);
                 if (ratio_idx < 0) ratio_idx = 0;
                 if (ratio_idx >= kNumClockRatios) ratio_idx = kNumClockRatios - 1;
@@ -248,6 +249,7 @@ PlaitsPort::PlaitsPort()
     , previous_gate_(false)
     , sample_rate_(48000.0f)
     , midi_clock_hz_(0.0f)
+    , gate2_clock_hz_(0.0f)
     , sample_counter_(0) {
 }
 
@@ -578,8 +580,8 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         // Process CV modulators (once per audio block)
         // Get LPG envelope from voice for LPG_ENV mode
         float lpg_gain = voice_->GetLPGGain();
-        cv_modulator_1_.Process(lpg_gain, midi_clock_hz_);
-        cv_modulator_2_.Process(lpg_gain, midi_clock_hz_);
+        cv_modulator_1_.Process(lpg_gain, midi_clock_hz_, gate2_clock_hz_);
+        cv_modulator_2_.Process(lpg_gain, midi_clock_hz_, gate2_clock_hz_);
         
         // Get volume with velocity modulation
         float vol_vel = midi_velocity_ * params_[10].mapping.velocity_amount;
@@ -608,12 +610,22 @@ size_t PlaitsPort::GetParameterCount() const {
 
 void PlaitsPort::ProcessGate(int gate_index, bool state) {
     if (gate_index == 0) {
+        // Gate 1: Trigger input for AD envelopes
         // Detect rising edge for CV modulator triggers
         if (state && !gate_state_) {
             cv_modulator_1_.Trigger();
             cv_modulator_2_.Trigger();
         }
         gate_state_ = state;
+    } else if (gate_index == 1) {
+        // Gate 2: Clock input for LFO sync
+        gate2_clock_tracker_.Process(state, sample_counter_);
+        // Update clock Hz for modulators
+        if (gate2_clock_tracker_.IsActive(sample_counter_, sample_rate_)) {
+            gate2_clock_hz_ = gate2_clock_tracker_.GetClockHz(sample_rate_);
+        } else {
+            gate2_clock_hz_ = 0.0f;
+        }
     }
 }
 
@@ -632,7 +644,7 @@ void PlaitsPort::UpdateCVModulatorsFromParams() {
     cv_modulator_1_.SetAttack(cv_out1_params_[1].value);
     cv_modulator_1_.SetRelease(cv_out1_params_[2].value);
     cv_modulator_1_.SetLFOShape(static_cast<LFOShape>(cv_out1_params_[3].GetIndex()));
-    cv_modulator_1_.SetClockSync(cv_out1_params_[4].GetIndex() == 1);
+    cv_modulator_1_.SetSyncMode(static_cast<SyncMode>(cv_out1_params_[4].GetIndex()));
     cv_modulator_1_.SetRate(cv_out1_params_[5].value);
     cv_modulator_1_.SetAmp(cv_out1_params_[6].value);
     cv_modulator_1_.SetPhaseOffset(cv_out1_params_[7].value);
@@ -642,7 +654,7 @@ void PlaitsPort::UpdateCVModulatorsFromParams() {
     cv_modulator_2_.SetAttack(cv_out2_params_[1].value);
     cv_modulator_2_.SetRelease(cv_out2_params_[2].value);
     cv_modulator_2_.SetLFOShape(static_cast<LFOShape>(cv_out2_params_[3].GetIndex()));
-    cv_modulator_2_.SetClockSync(cv_out2_params_[4].GetIndex() == 1);
+    cv_modulator_2_.SetSyncMode(static_cast<SyncMode>(cv_out2_params_[4].GetIndex()));
     cv_modulator_2_.SetRate(cv_out2_params_[5].value);
     cv_modulator_2_.SetAmp(cv_out2_params_[6].value);
     cv_modulator_2_.SetPhaseOffset(cv_out2_params_[7].value);

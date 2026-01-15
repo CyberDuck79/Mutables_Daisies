@@ -97,7 +97,9 @@ private:
     CVModulator cv_modulator_1_;
     CVModulator cv_modulator_2_;
     MIDIClockTracker midi_clock_tracker_;
+    GateClockTracker gate2_clock_tracker_;
     float midi_clock_hz_;
+    float gate2_clock_hz_;
     uint32_t sample_counter_;
     
     void UpdatePatchFromParams();

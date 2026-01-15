@@ -13,6 +13,13 @@ enum class CVOutMode {
     LFO            // Low Frequency Oscillator
 };
 
+// LFO sync modes
+enum class SyncMode {
+    FREE = 0,      // Free running (rate in Hz)
+    MIDI,          // Synced to MIDI clock
+    GATE2          // Synced to Gate 2 clock input
+};
+
 // LFO waveform shapes
 enum class LFOShape {
     SINE = 0,
@@ -78,7 +85,7 @@ public:
         
         // LFO params
         lfo_shape_ = LFOShape::SINE;
-        clock_sync_ = false;
+        sync_mode_ = SyncMode::FREE;
         rate_ = 1.0f;      // 1 Hz default (or ratio index)
         amp_ = 1.0f;       // Full amplitude
         phase_offset_ = 0.0f;  // 0-1 normalized
@@ -118,7 +125,7 @@ public:
     }
     
     // Process one block - returns output value (0.0 to 1.0)
-    float Process(float lpg_gain, float midi_clock_hz) {
+    float Process(float lpg_gain, float midi_clock_hz, float gate2_clock_hz) {
         float raw_output = 0.0f;
         
         switch (mode_) {
@@ -131,7 +138,7 @@ public:
                 break;
                 
             case CVOutMode::LFO:
-                raw_output = ProcessLFO(midi_clock_hz);
+                raw_output = ProcessLFO(midi_clock_hz, gate2_clock_hz);
                 break;
         }
         
@@ -147,7 +154,7 @@ public:
     void SetAttack(float attack) { attack_ = attack; }
     void SetRelease(float release) { release_ = release; }
     void SetLFOShape(LFOShape shape) { lfo_shape_ = shape; }
-    void SetClockSync(bool sync) { clock_sync_ = sync; }
+    void SetSyncMode(SyncMode mode) { sync_mode_ = mode; }
     void SetRate(float rate) { rate_ = rate; }
     void SetAmp(float amp) { amp_ = amp; }
     void SetPhaseOffset(float phase) { phase_offset_ = phase; }
@@ -194,10 +201,23 @@ private:
     }
     
     // LFO processing
-    float ProcessLFO(float midi_clock_hz) {
-        // Calculate frequency
+    float ProcessLFO(float midi_clock_hz, float gate2_clock_hz) {
+        // Calculate frequency based on sync mode
         float freq;
-        if (clock_sync_ && midi_clock_hz > 0.0f) {
+        float clock_hz = 0.0f;
+        
+        switch (sync_mode_) {
+            case SyncMode::MIDI:
+                clock_hz = midi_clock_hz;
+                break;
+            case SyncMode::GATE2:
+                clock_hz = gate2_clock_hz;
+                break;
+            default:
+                break;
+        }
+        
+        if (sync_mode_ != SyncMode::FREE && clock_hz > 0.0f) {
             // Clock sync mode: rate_ is 0-1, map to ratio index
             int ratio_idx = static_cast<int>(rate_ * (static_cast<float>(ClockRatio::NUM_RATIOS) - 1.0f) + 0.5f);
             if (ratio_idx < 0) ratio_idx = 0;
@@ -205,8 +225,8 @@ private:
                 ratio_idx = static_cast<int>(ClockRatio::NUM_RATIOS) - 1;
             }
             // MIDI clock is 24 ppq, midi_clock_hz is clocks per second
-            // Quarter note frequency = midi_clock_hz / 24
-            float quarter_note_hz = midi_clock_hz / 24.0f;
+            // Gate2 clock is assumed to be 1 ppq (quarter note)
+            float quarter_note_hz = (sync_mode_ == SyncMode::MIDI) ? clock_hz / 24.0f : clock_hz;
             freq = quarter_note_hz / kClockRatioValues[ratio_idx];
         } else {
             // Free running mode: rate_ is 0-1 mapped to 0.1-20 Hz (log)
@@ -278,7 +298,7 @@ private:
     float attack_;
     float release_;
     LFOShape lfo_shape_;
-    bool clock_sync_;
+    SyncMode sync_mode_;
     float rate_;
     float amp_;
     float phase_offset_;
@@ -343,6 +363,55 @@ private:
     uint32_t clock_period_samples_;
     float clock_hz_;
     uint32_t clock_count_;
+};
+
+// Gate clock tracker (tracks rising edges of gate input)
+class GateClockTracker {
+public:
+    GateClockTracker() { Init(); }
+    
+    void Init() {
+        last_clock_time_ = 0;
+        clock_period_samples_ = 0;
+        last_gate_state_ = false;
+    }
+    
+    // Call each block with current gate state and sample position
+    void Process(bool gate_state, uint32_t current_sample) {
+        // Detect rising edge
+        if (gate_state && !last_gate_state_) {
+            if (last_clock_time_ > 0 && current_sample > last_clock_time_) {
+                uint32_t period = current_sample - last_clock_time_;
+                // Simple averaging filter
+                if (clock_period_samples_ == 0) {
+                    clock_period_samples_ = period;
+                } else {
+                    clock_period_samples_ = (clock_period_samples_ * 7 + period) / 8;
+                }
+            }
+            last_clock_time_ = current_sample;
+        }
+        last_gate_state_ = gate_state;
+    }
+    
+    // Get estimated clock frequency in Hz (rising edges per second)
+    float GetClockHz(float sample_rate) const {
+        if (clock_period_samples_ == 0) return 0.0f;
+        return sample_rate / static_cast<float>(clock_period_samples_);
+    }
+    
+    // Check if clock is active (received recently)
+    bool IsActive(uint32_t current_sample, float sample_rate) const {
+        // Consider inactive if no clock for > 2 seconds
+        if (last_clock_time_ == 0) return false;
+        uint32_t timeout = static_cast<uint32_t>(sample_rate * 2.0f);
+        return (current_sample - last_clock_time_) < timeout;
+    }
+    
+private:
+    uint32_t last_clock_time_;
+    uint32_t clock_period_samples_;
+    bool last_gate_state_;
 };
 
 } // namespace mutables_plaits

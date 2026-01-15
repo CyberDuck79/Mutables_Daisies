@@ -114,64 +114,6 @@ int CalculateEnumFromCV(const mutables_ui::Parameter& param, const CVInputBank& 
     return std::clamp(index, 0, static_cast<int>(param.enum_count) - 1);
 }
 
-// Process gate trigger for ENUM parameters
-void ProcessEnumGate(mutables_ui::Parameter& param, bool gate_state) {
-    MappingConfig& m = param.mapping;
-    
-    if (!m.IsGateSource()) return;
-    
-    bool trigger = false;
-    
-    // Edge detection based on trigger mode
-    switch (m.trigger) {
-        case TriggerMode::RISE:
-            trigger = gate_state && !m.last_gate_state;
-            break;
-        case TriggerMode::FALL:
-            trigger = !gate_state && m.last_gate_state;
-            break;
-        case TriggerMode::RISE_AND_FALL:
-            trigger = gate_state != m.last_gate_state;
-            break;
-    }
-    
-    m.last_gate_state = gate_state;
-    
-    if (trigger) {
-        int current = param.GetIndex();
-        int max_val = static_cast<int>(param.max);
-        
-        switch (m.action) {
-            case EnumAction::INCREMENT:
-                current = (current + 1) > max_val ? 0 : current + 1;
-                break;
-            case EnumAction::DECREMENT:
-                current = (current - 1) < 0 ? max_val : current - 1;
-                break;
-            case EnumAction::TOGGLE_PLUS:
-                // +- : increment on first edge, decrement on second
-                if (m.toggle_state) {
-                    current = (current - 1) < 0 ? max_val : current - 1;
-                } else {
-                    current = (current + 1) > max_val ? 0 : current + 1;
-                }
-                m.toggle_state = !m.toggle_state;
-                break;
-            case EnumAction::TOGGLE_MINUS:
-                // -+ : decrement on first edge, increment on second
-                if (m.toggle_state) {
-                    current = (current + 1) > max_val ? 0 : current + 1;
-                } else {
-                    current = (current - 1) < 0 ? max_val : current - 1;
-                }
-                m.toggle_state = !m.toggle_state;
-                break;
-        }
-        
-        param.SetIndex(current);
-    }
-}
-
 void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size) {
     // Update CV inputs
     float cv1 = hw.GetKnobValue(DaisyPatch::CTRL_1);
@@ -270,18 +212,12 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     plaits_module.SetCVModulations(frequency_cv, timbre_cv, morph_cv);
     
     // Process gate inputs for module
+    // Gate 1: Trigger input for AD envelopes (and MIDI note triggers)
+    // Gate 2: Clock input for LFO sync
     bool gate1_state = hw.gate_input[0].State();
     bool gate2_state = hw.gate_input[1].State();
     plaits_module.ProcessGate(0, gate1_state);
-    
-    // Process gate triggers for ENUM parameters
-    for (size_t i = 0; i < param_count; i++) {
-        auto& param = params[i];
-        if (param.type == ParamType::ENUM && param.mapping.IsGateSource()) {
-            bool gate_state = (param.mapping.source == MappingSource::GATE1) ? gate1_state : gate2_state;
-            ProcessEnumGate(param, gate_state);
-        }
-    }
+    plaits_module.ProcessGate(1, gate2_state);
     
     // Setup audio pointers
     for (size_t i = 0; i < 4; i++) {
@@ -331,10 +267,13 @@ void CycleMappingSource(mutables_ui::Parameter& param, int direction) {
         if (current < 0) current = static_cast<int>(MappingSource::CV4);
         if (current > static_cast<int>(MappingSource::CV4)) current = 0;
     } else if (param.type == ParamType::ENUM) {
-        // ENUM: None, Gate1-2, CV1-4, CC
-        current += direction;
-        if (current < 0) current = static_cast<int>(MappingSource::CC);
-        if (current > static_cast<int>(MappingSource::CC)) current = 0;
+        // ENUM: None, CV1-4, CC (skip Gate1, Gate2 - gates are reserved for trigger/clock)
+        do {
+            current += direction;
+            if (current < 0) current = static_cast<int>(MappingSource::CC);
+            if (current > static_cast<int>(MappingSource::CC)) current = 0;
+        } while (current == static_cast<int>(MappingSource::GATE1) || 
+                 current == static_cast<int>(MappingSource::GATE2));
     }
     
     param.mapping.source = static_cast<MappingSource>(current);
