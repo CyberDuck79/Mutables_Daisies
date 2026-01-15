@@ -2,6 +2,7 @@
 
 #include "../common/module_base.h"
 #include "../common/parameter.h"
+#include "cv_modulator.h"
 #include <array>
 
 // Forward declarations for Plaits classes
@@ -58,10 +59,13 @@ private:
     uint8_t buffer_[kBufferSize];
     
     // Parameters
-    static constexpr int kNumParams = 15;  // Bank, Engine, Freq.Rng, Frequency, Harmonics, Timbre, Morph, Level, LPG Color, LPG Decay, Volume, MIDI Ch, User Data (SUB), Save, Load
+    static constexpr int kNumParams = 17;  // Bank, Engine, Freq.Rng, Frequency, Harmonics, Timbre, Morph, Level, LPG Color, LPG Decay, Volume, MIDI Ch, User Data (SUB), CV Out 1 (SUB), CV Out 2 (SUB), Save, Load
     static constexpr int kNumUserDataParams = 5;  // 3 FM banks + wavetable + wave terrain
+    static constexpr int kNumCVOutParams = 8;  // Mode, Attack, Release, Shape, Sync, Rate/Ratio, Amp, Phase
     std::array<mutables_ui::Parameter, kNumParams> params_;
     std::array<mutables_ui::Parameter, kNumUserDataParams> user_data_params_;  // Children of User Data submenu
+    std::array<mutables_ui::Parameter, kNumCVOutParams> cv_out1_params_;  // Children of CV Out 1 submenu
+    std::array<mutables_ui::Parameter, kNumCVOutParams> cv_out2_params_;  // Children of CV Out 2 submenu
     
     // Bank and engine system
     static const char* bank_names_[];
@@ -89,16 +93,29 @@ private:
     bool previous_gate_;   // For trigger detection
     float sample_rate_;
     
+    // CV Output modulators
+    CVModulator cv_modulator_1_;
+    CVModulator cv_modulator_2_;
+    MIDIClockTracker midi_clock_tracker_;
+    float midi_clock_hz_;
+    uint32_t sample_counter_;
+    
     void UpdatePatchFromParams();
     void SetupParameters();
     void UpdateEngineListForBank(int bank);
     int GetActualEngineIndex(int bank, int engine_in_bank);
+    void UpdateCVModulatorsFromParams();
+    void SetupCVOutParams(std::array<mutables_ui::Parameter, kNumCVOutParams>& params, const char* name_prefix);
     
 public:
     // MIDI interface
     void NoteOn(uint8_t note, uint8_t velocity);
     void NoteOff(uint8_t note, uint8_t velocity);
     float GetVelocity() const { return midi_velocity_; }
+    
+    // MIDI clock handling
+    void OnMIDIClock();
+    void UpdateSampleCounter(size_t samples);
     
     // Get MIDI channel setting: 0 = Omni (all), 1-16 = specific channel
     int GetMidiChannel() const { return params_[11].GetIndex(); }

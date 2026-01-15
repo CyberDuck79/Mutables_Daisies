@@ -52,6 +52,101 @@ public:
         hw_->display.Update();
     }
     
+    // Render SUB children with visibility support
+    void RenderSubMenu(const MenuState& menu, Parameter* parent) {
+        if (!hw_ || !parent || !parent->children) return;
+        
+        hw_->display.Fill(false);
+        
+        // Title bar with parent name
+        char title[20];
+        snprintf(title, sizeof(title), "%.12s", parent->name);
+        hw_->display.SetCursor(0, 0);
+        hw_->display.WriteString(title, Font_6x8, true);
+        hw_->display.DrawLine(0, 9, 127, 9, true);
+        
+        int line = 12;
+        int visible_idx = 0;
+        int visible_scroll = 0;  // Count visible items before scroll offset
+        
+        // First pass: count visible items before current scroll offset to know effective offset
+        for (int i = 0; i < menu.scroll_offset && i < parent->child_count; i++) {
+            if (parent->children[i].IsVisible(parent->children, parent->child_count, i)) {
+                visible_scroll++;
+            }
+        }
+        
+        // Render visible items
+        for (int param_idx = 0; param_idx < parent->child_count && line < 64; param_idx++) {
+            Parameter& param = parent->children[param_idx];
+            
+            // Check visibility
+            if (!param.IsVisible(parent->children, parent->child_count, param_idx)) {
+                continue;  // Skip invisible params
+            }
+            
+            // Skip items before scroll offset
+            if (visible_idx < visible_scroll) {
+                visible_idx++;
+                continue;
+            }
+            
+            // Render this parameter
+            RenderSubParameter(param, parent->children, parent->child_count, param_idx,
+                              line, 
+                              param_idx == menu.sub_child_selected,
+                              menu.state == UIState::EditValue && param_idx == menu.sub_child_selected);
+            line += 13;
+            visible_idx++;
+            
+            // Stop after visible params limit
+            if (visible_idx - visible_scroll >= MenuState::VISIBLE_PARAMS) break;
+        }
+        
+        hw_->display.Update();
+    }
+    
+    // Render a parameter within a SUB (with context for formatting)
+    void RenderSubParameter(const Parameter& param, const Parameter* siblings, uint8_t sibling_count, 
+                           uint8_t param_index, int y, bool selected, bool editing) {
+        char buffer[32];
+        
+        // Parameter name
+        hw_->display.SetCursor(0, y + 1);
+        snprintf(buffer, sizeof(buffer), "%.10s", param.name);
+        int name_len = strlen(buffer);
+        hw_->display.WriteString(buffer, Font_7x10, true);
+        
+        // Underline if selected
+        if (selected) {
+            hw_->display.DrawLine(0, y + 11, name_len * 7 - 1, y + 11, true);
+        }
+        
+        // Value (skip for SAVE/LOAD/SUB)
+        if (param.type != ParamType::SAVE && 
+            param.type != ParamType::LOAD && 
+            param.type != ParamType::SUB) {
+            // Use the custom formatter if available
+            param.FormatDisplayValue(siblings, sibling_count, param_index, buffer, sizeof(buffer));
+            int value_len = strlen(buffer);
+            int value_width = value_len * 7;
+            
+            if (editing) {
+                hw_->display.DrawLine(76, y + 1, 76 + value_width - 1, y + 1, true);
+                hw_->display.DrawLine(76, y + 12, 76 + value_width - 1, y + 12, true);
+            }
+            
+            hw_->display.SetCursor(76, y + 2);
+            hw_->display.WriteString(buffer, Font_7x10, !editing);
+        }
+        
+        // Submenu indicator
+        if (param.HasSubmenu()) {
+            hw_->display.SetCursor(121, y + 1);
+            hw_->display.WriteString(">", Font_7x10, true);
+        }
+    }
+    
     // Render submenu for KNOB type
     void RenderKnobSubmenu(const MenuState& menu, Parameter& param) {
         if (!hw_) return;

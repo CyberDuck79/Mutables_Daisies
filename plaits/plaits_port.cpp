@@ -68,6 +68,173 @@ const char* PlaitsPort::new_engine_names_[] = {
     "Chip"       // 7: Chiptune
 };
 
+// CV Output mode names
+static const char* cv_out_mode_names[] = {
+    "LPG Env",   // Follows internal LPG envelope
+    "AD",        // AD envelope triggered on gate
+    "LFO"        // Low frequency oscillator
+};
+static constexpr int kNumCVOutModes = 3;
+
+// LFO shape names
+static const char* lfo_shape_names[] = {
+    "Sine",
+    "Tri",
+    "Saw",
+    "Square",
+    "S&H",
+    "RndSmth"
+};
+static constexpr int kNumLFOShapes = 6;
+
+// Clock sync on/off
+static const char* sync_names[] = {
+    "Free",
+    "MIDI"
+};
+static constexpr int kNumSyncModes = 2;
+
+// Clock ratio names for display when MIDI sync is enabled
+static const char* clock_ratio_names[] = {
+    "1/16", "1/16T", "1/16D",
+    "1/8", "1/8T", "1/8D",
+    "1/4", "1/4T", "1/4D",
+    "1/2", "1/2T", "1/2D",
+    "1", "2", "4", "8"
+};
+static constexpr int kNumClockRatios = 16;
+
+// CV Out parameter indices within SUB
+enum CVOutParamIndex {
+    CVOUT_MODE = 0,
+    CVOUT_ATTACK = 1,
+    CVOUT_RELEASE = 2,
+    CVOUT_SHAPE = 3,
+    CVOUT_SYNC = 4,
+    CVOUT_RATE = 5,
+    CVOUT_AMP = 6,
+    CVOUT_PHASE = 7
+};
+
+// Visibility callback for CV Out params
+// Mode 0 = LPG Env: only show Amp
+// Mode 1 = AD: show Attack, Release, Amp
+// Mode 2 = LFO: show Shape, Sync, Rate, Amp, Phase
+static bool CVOutVisibilityCallback(const mutables_ui::Parameter* siblings, uint8_t sibling_count, uint8_t param_index) {
+    if (sibling_count < 1) return true;
+    
+    int mode = siblings[CVOUT_MODE].GetIndex();
+    
+    switch (param_index) {
+        case CVOUT_MODE:
+            return true;  // Always visible
+        case CVOUT_ATTACK:
+        case CVOUT_RELEASE:
+            return (mode == 1);  // Only for AD mode
+        case CVOUT_SHAPE:
+        case CVOUT_SYNC:
+        case CVOUT_PHASE:
+            return (mode == 2);  // Only for LFO mode
+        case CVOUT_RATE:
+            return (mode == 2);  // Only for LFO mode
+        case CVOUT_AMP:
+            return true;  // Always visible
+        default:
+            return true;
+    }
+}
+
+// Format callback for CV Out params
+static void CVOutFormatCallback(const mutables_ui::Parameter* param, 
+                                const mutables_ui::Parameter* siblings, 
+                                uint8_t sibling_count, uint8_t param_index,
+                                char* buffer, size_t buffer_size) {
+    // Handle ENUM types
+    if (param->type == mutables_ui::ParamType::ENUM) {
+        snprintf(buffer, buffer_size, "%.6s", param->GetEnumLabel());
+        return;
+    }
+    
+    float value = param->value;
+    
+    switch (param_index) {
+        case CVOUT_ATTACK:
+            // 0.5ms to 200ms log scaled
+            {
+                float ms = 0.5f * powf(400.0f, value);
+                int ms_int = static_cast<int>(ms * 10.0f + 0.5f);  // tenths of ms
+                if (ms < 10.0f) {
+                    // Show one decimal place: X.Xms
+                    snprintf(buffer, buffer_size, "%d.%dms", ms_int / 10, ms_int % 10);
+                } else {
+                    // Show integer ms
+                    snprintf(buffer, buffer_size, "%dms", static_cast<int>(ms + 0.5f));
+                }
+            }
+            break;
+            
+        case CVOUT_RELEASE:
+            // 5ms to 2000ms log scaled
+            {
+                float ms = 5.0f * powf(400.0f, value);
+                if (ms < 1000.0f) {
+                    snprintf(buffer, buffer_size, "%dms", static_cast<int>(ms + 0.5f));
+                } else {
+                    // Show as seconds with one decimal
+                    int s_int = static_cast<int>(ms / 100.0f + 0.5f);  // tenths of seconds
+                    snprintf(buffer, buffer_size, "%d.%ds", s_int / 10, s_int % 10);
+                }
+            }
+            break;
+            
+        case CVOUT_RATE:
+            // Check if MIDI sync is enabled
+            if (sibling_count > CVOUT_SYNC && siblings[CVOUT_SYNC].GetIndex() == 1) {
+                // MIDI sync mode: show ratio name
+                int ratio_idx = static_cast<int>(value * (kNumClockRatios - 1) + 0.5f);
+                if (ratio_idx < 0) ratio_idx = 0;
+                if (ratio_idx >= kNumClockRatios) ratio_idx = kNumClockRatios - 1;
+                snprintf(buffer, buffer_size, "%s", clock_ratio_names[ratio_idx]);
+            } else {
+                // Free mode: show Hz (0.1 to 20 Hz log scaled)
+                float hz = 0.1f * powf(200.0f, value);
+                int hz_int = static_cast<int>(hz * 100.0f + 0.5f);  // hundredths of Hz
+                if (hz < 1.0f) {
+                    // Show two decimals: 0.XXHz
+                    snprintf(buffer, buffer_size, "0.%02dHz", hz_int);
+                } else if (hz < 10.0f) {
+                    // Show one decimal: X.XHz
+                    int hz_tenths = static_cast<int>(hz * 10.0f + 0.5f);
+                    snprintf(buffer, buffer_size, "%d.%dHz", hz_tenths / 10, hz_tenths % 10);
+                } else {
+                    // Show integer Hz
+                    snprintf(buffer, buffer_size, "%dHz", static_cast<int>(hz + 0.5f));
+                }
+            }
+            break;
+            
+        case CVOUT_AMP:
+            // Percentage 0-100%
+            snprintf(buffer, buffer_size, "%d%%", static_cast<int>(value * 100.0f + 0.5f));
+            break;
+            
+        case CVOUT_PHASE:
+            // Degrees 0-360
+            snprintf(buffer, buffer_size, "%d", static_cast<int>(value * 360.0f + 0.5f));
+            break;
+            
+        default:
+            // Default: show as 0.00
+            {
+                int val_int = static_cast<int>(value * 100.0f);
+                int whole = val_int / 100;
+                int frac = val_int % 100;
+                snprintf(buffer, buffer_size, "%d.%02d", whole, frac);
+            }
+            break;
+    }
+}
+
 PlaitsPort::PlaitsPort() 
     : voice_(nullptr)
     , patch_(nullptr)
@@ -79,7 +246,9 @@ PlaitsPort::PlaitsPort()
     , midi_gate_(false)
     , gate_state_(false)
     , previous_gate_(false)
-    , sample_rate_(48000.0f) {
+    , sample_rate_(48000.0f)
+    , midi_clock_hz_(0.0f)
+    , sample_counter_(0) {
 }
 
 PlaitsPort::~PlaitsPort() {
@@ -120,6 +289,13 @@ void PlaitsPort::Init(float sample_rate) {
     modulations_->morph_patched = false;
     modulations_->trigger_patched = false;
     modulations_->level_patched = false;
+    
+    // Initialize CV modulators
+    cv_modulator_1_.Init();
+    cv_modulator_1_.SetSampleRate(sample_rate, kBlockSize);
+    cv_modulator_2_.Init();
+    cv_modulator_2_.SetSampleRate(sample_rate, kBlockSize);
+    midi_clock_tracker_.Init();
     
     // Setup parameters
     SetupParameters();
@@ -184,9 +360,41 @@ void PlaitsPort::SetupParameters() {
     user_data_params_[4] = mutables_ui::Parameter::UserData("Wavetable", 4);  // TARGET_WAVETABLE
     params_[12] = mutables_ui::Parameter::Sub("User Data", user_data_params_.data(), kNumUserDataParams);
     
+    // CV Output 1 submenu
+    SetupCVOutParams(cv_out1_params_, "CV1");
+    params_[13] = mutables_ui::Parameter::Sub("CV Out 1", cv_out1_params_.data(), kNumCVOutParams);
+    
+    // CV Output 2 submenu
+    SetupCVOutParams(cv_out2_params_, "CV2");
+    params_[14] = mutables_ui::Parameter::Sub("CV Out 2", cv_out2_params_.data(), kNumCVOutParams);
+    
     // Save/Load presets
-    params_[13] = mutables_ui::Parameter::Save();
-    params_[14] = mutables_ui::Parameter::Load();
+    params_[15] = mutables_ui::Parameter::Save();
+    params_[16] = mutables_ui::Parameter::Load();
+}
+
+void PlaitsPort::SetupCVOutParams(std::array<mutables_ui::Parameter, kNumCVOutParams>& params, const char* name_prefix) {
+    // Mode: LPG Env, AD, LFO
+    params[0] = mutables_ui::Parameter::Enum("Mode", cv_out_mode_names, kNumCVOutModes);
+    
+    // AD envelope params (used when mode = AD)
+    params[1] = mutables_ui::Parameter::Knob("Attack", 0.0f, 1.0f, 0.01f);    // 0.5ms-200ms log scaled
+    params[2] = mutables_ui::Parameter::Knob("Release", 0.0f, 1.0f, 0.3f);    // 5ms-2000ms log scaled
+    
+    // LFO params (used when mode = LFO)
+    params[3] = mutables_ui::Parameter::Enum("Shape", lfo_shape_names, kNumLFOShapes);
+    params[4] = mutables_ui::Parameter::Enum("Sync", sync_names, kNumSyncModes);
+    params[5] = mutables_ui::Parameter::Knob("Rate", 0.0f, 1.0f, 0.3f);       // 0.1-20Hz free, or ratio index when synced
+    
+    // Common params
+    params[6] = mutables_ui::Parameter::Knob("Amp", 0.0f, 1.0f, 1.0f);        // Output amplitude scaling
+    params[7] = mutables_ui::Parameter::Knob("Phase", 0.0f, 1.0f, 0.0f);      // LFO initial phase offset (0-360°)
+    
+    // Assign visibility and format callbacks to all params
+    for (int i = 0; i < kNumCVOutParams; i++) {
+        params[i].visibility_callback = CVOutVisibilityCallback;
+        params[i].format_callback = CVOutFormatCallback;
+    }
 }
 
 void PlaitsPort::UpdateEngineListForBank(int bank) {
@@ -329,6 +537,7 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
     if (!voice_ || !patch_ || !modulations_) return;
     
     UpdatePatchFromParams();
+    UpdateCVModulatorsFromParams();
     
     // Plaits processes in blocks
     plaits::Voice::Frame frames[kBlockSize];
@@ -366,6 +575,12 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         // Render audio
         voice_->Render(*patch_, *modulations_, frames, block_size);
         
+        // Process CV modulators (once per audio block)
+        // Get LPG envelope from voice for LPG_ENV mode
+        float lpg_gain = voice_->GetLPGGain();
+        cv_modulator_1_.Process(lpg_gain, midi_clock_hz_);
+        cv_modulator_2_.Process(lpg_gain, midi_clock_hz_);
+        
         // Get volume with velocity modulation
         float vol_vel = midi_velocity_ * params_[10].mapping.velocity_amount;
         float volume = std::clamp(params_[10].value + vol_vel, 0.0f, 1.0f);
@@ -393,13 +608,58 @@ size_t PlaitsPort::GetParameterCount() const {
 
 void PlaitsPort::ProcessGate(int gate_index, bool state) {
     if (gate_index == 0) {
+        // Detect rising edge for CV modulator triggers
+        if (state && !gate_state_) {
+            cv_modulator_1_.Trigger();
+            cv_modulator_2_.Trigger();
+        }
         gate_state_ = state;
     }
 }
 
 float PlaitsPort::GetCVOutput(int cv_index) {
-    // Could output envelope or other modulation signals
+    if (cv_index == 0) {
+        return cv_modulator_1_.GetOutput();
+    } else if (cv_index == 1) {
+        return cv_modulator_2_.GetOutput();
+    }
     return 0.0f;
+}
+
+void PlaitsPort::UpdateCVModulatorsFromParams() {
+    // Update CV modulator 1 from its params
+    cv_modulator_1_.SetMode(static_cast<CVOutMode>(cv_out1_params_[0].GetIndex()));
+    cv_modulator_1_.SetAttack(cv_out1_params_[1].value);
+    cv_modulator_1_.SetRelease(cv_out1_params_[2].value);
+    cv_modulator_1_.SetLFOShape(static_cast<LFOShape>(cv_out1_params_[3].GetIndex()));
+    cv_modulator_1_.SetClockSync(cv_out1_params_[4].GetIndex() == 1);
+    cv_modulator_1_.SetRate(cv_out1_params_[5].value);
+    cv_modulator_1_.SetAmp(cv_out1_params_[6].value);
+    cv_modulator_1_.SetPhaseOffset(cv_out1_params_[7].value);
+    
+    // Update CV modulator 2 from its params
+    cv_modulator_2_.SetMode(static_cast<CVOutMode>(cv_out2_params_[0].GetIndex()));
+    cv_modulator_2_.SetAttack(cv_out2_params_[1].value);
+    cv_modulator_2_.SetRelease(cv_out2_params_[2].value);
+    cv_modulator_2_.SetLFOShape(static_cast<LFOShape>(cv_out2_params_[3].GetIndex()));
+    cv_modulator_2_.SetClockSync(cv_out2_params_[4].GetIndex() == 1);
+    cv_modulator_2_.SetRate(cv_out2_params_[5].value);
+    cv_modulator_2_.SetAmp(cv_out2_params_[6].value);
+    cv_modulator_2_.SetPhaseOffset(cv_out2_params_[7].value);
+}
+
+void PlaitsPort::OnMIDIClock() {
+    midi_clock_tracker_.OnClock(sample_counter_);
+    // Update clock Hz for modulators
+    if (midi_clock_tracker_.IsActive(sample_counter_, sample_rate_)) {
+        midi_clock_hz_ = midi_clock_tracker_.GetClockHz(sample_rate_);
+    } else {
+        midi_clock_hz_ = 0.0f;
+    }
+}
+
+void PlaitsPort::UpdateSampleCounter(size_t samples) {
+    sample_counter_ += samples;
 }
 
 void PlaitsPort::NoteOn(uint8_t note, uint8_t velocity) {

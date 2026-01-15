@@ -93,6 +93,12 @@ struct MappingConfig {
     }
 };
 
+// Callback types for dynamic parameter behavior
+// siblings is the array of sibling parameters, sibling_count is the number of siblings
+// param_index is the index of the current parameter in the siblings array
+typedef bool (*VisibilityCallback)(const struct Parameter* siblings, uint8_t sibling_count, uint8_t param_index);
+typedef void (*ValueFormatCallback)(const struct Parameter* param, const struct Parameter* siblings, uint8_t sibling_count, uint8_t param_index, char* buffer, size_t buffer_size);
+
 struct Parameter {
     const char* name;
     ParamType type;
@@ -113,6 +119,10 @@ struct Parameter {
     uint8_t user_data_target;       // Target index (0-4 for plaits)
     char user_data_filename[32];    // Current filename or empty for firmware default
     
+    // Dynamic visibility and formatting callbacks
+    VisibilityCallback visibility_callback;
+    ValueFormatCallback format_callback;
+    
     // Default constructor
     Parameter()
         : name("")
@@ -124,7 +134,9 @@ struct Parameter {
         , enum_count(0)
         , children(nullptr)
         , child_count(0)
-        , user_data_target(0) {
+        , user_data_target(0)
+        , visibility_callback(nullptr)
+        , format_callback(nullptr) {
         user_data_filename[0] = '\0';
     }
     
@@ -297,6 +309,32 @@ struct Parameter {
         return type == ParamType::KNOB || 
                type == ParamType::CV || 
                type == ParamType::ENUM;
+    }
+    
+    // Check if parameter is visible (uses callback if set)
+    bool IsVisible(const Parameter* siblings, uint8_t sibling_count, uint8_t param_index) const {
+        if (visibility_callback) {
+            return visibility_callback(siblings, sibling_count, param_index);
+        }
+        return true;  // Visible by default
+    }
+    
+    // Format value for display (uses callback if set)
+    void FormatDisplayValue(const Parameter* siblings, uint8_t sibling_count, uint8_t param_index, 
+                           char* buffer, size_t buffer_size) const {
+        if (format_callback) {
+            format_callback(this, siblings, sibling_count, param_index, buffer, buffer_size);
+        } else {
+            // Default formatting
+            if (type == ParamType::ENUM && enum_labels) {
+                snprintf(buffer, buffer_size, "%.6s", GetEnumLabel());
+            } else {
+                int val_int = (int)(value * 100.0f);
+                int whole = val_int / 100;
+                int frac = val_int % 100;
+                snprintf(buffer, buffer_size, "%d.%02d", whole, frac);
+            }
+        }
     }
 };
 

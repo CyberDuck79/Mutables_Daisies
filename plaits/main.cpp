@@ -299,6 +299,18 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     
     // Process audio
     plaits_module.Process(audio_in, audio_out, size);
+    
+    // Update sample counter for MIDI clock tracking
+    plaits_module.UpdateSampleCounter(size);
+    
+    // Write CV modulator outputs to DAC (0-1 float -> 0-4095 DAC value)
+    // Channel 1 = CV Out 1, Channel 2 = CV Out 2
+    float cv_out_1 = plaits_module.GetCVOutput(0);
+    float cv_out_2 = plaits_module.GetCVOutput(1);
+    uint16_t dac_1 = static_cast<uint16_t>(std::clamp(cv_out_1, 0.0f, 1.0f) * 4095.0f);
+    uint16_t dac_2 = static_cast<uint16_t>(std::clamp(cv_out_2, 0.0f, 1.0f) * 4095.0f);
+    hw.seed.dac.WriteValue(DacHandle::Channel::ONE, dac_1);
+    hw.seed.dac.WriteValue(DacHandle::Channel::TWO, dac_2);
 }
 
 // Cycle through mapping sources based on parameter type
@@ -363,8 +375,15 @@ void UpdateEncoder() {
     // Handle encoder based on state
     switch (menu.state) {
         case UIState::Navigate: {
-            if (encoder_increment > 0) menu.NextParam();
-            if (encoder_increment < 0) menu.PrevParam();
+            if (menu.IsInSub()) {
+                // Use visibility-aware navigation for SUB children
+                if (encoder_increment > 0) menu.NextSubChild();
+                if (encoder_increment < 0) menu.PrevSubChild();
+                menu.selected_param = menu.sub_child_selected;
+            } else {
+                if (encoder_increment > 0) menu.NextParam();
+                if (encoder_increment < 0) menu.PrevParam();
+            }
             
             // Get the currently active parameter array
             mutables_ui::Parameter* current_params = menu.IsInSub() && menu.sub_parent 
@@ -771,6 +790,14 @@ void ProcessMidi() {
     while (hw.midi.HasEvents()) {
         MidiEvent event = hw.midi.PopEvent();
         
+        // Handle MIDI clock (system realtime, not channel-dependent)
+        if (event.type == SystemRealTime) {
+            // MIDI Clock = 0xF8
+            if (event.srt_type == TimingClock) {
+                plaits_module.OnMIDIClock();
+            }
+        }
+        
         // MIDI Thru: Forward all events to output regardless of channel
         // Reconstruct raw MIDI bytes and send
         if (event.type == NoteOn || event.type == NoteOff || event.type == ControlChange) {
@@ -840,8 +867,8 @@ void UpdateDisplay() {
     } else if (menu.IsInSubmenu() && menu.submenu_param_index >= 0) {
         display.RenderSubmenu(menu, params[menu.submenu_param_index]);
     } else if (menu.IsInSub() && menu.sub_parent) {
-        // Browsing SUB's children
-        display.RenderMenu(menu, menu.sub_parent->children);
+        // Browsing SUB's children with visibility support
+        display.RenderSubMenu(menu, menu.sub_parent);
     } else {
         display.RenderMenu(menu, params);
     }

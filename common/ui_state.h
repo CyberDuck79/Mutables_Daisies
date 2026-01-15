@@ -251,7 +251,16 @@ struct MenuState {
     // Enter SUB parameter's children
     void EnterSub(Parameter* sub_param) {
         sub_parent = sub_param;
+        // Find first visible child
         sub_child_selected = 0;
+        if (sub_param && sub_param->children) {
+            for (int i = 0; i < sub_param->child_count; i++) {
+                if (sub_param->children[i].IsVisible(sub_param->children, sub_param->child_count, i)) {
+                    sub_child_selected = i;
+                    break;
+                }
+            }
+        }
         // param_count will be updated by caller
     }
     
@@ -263,6 +272,81 @@ struct MenuState {
     
     bool IsInSub() const {
         return sub_parent != nullptr;
+    }
+    
+    // Navigate to next visible SUB child
+    void NextSubChild() {
+        if (!sub_parent || !sub_parent->children) return;
+        
+        int start = sub_child_selected;
+        int count = sub_parent->child_count;
+        
+        // Find next visible item
+        do {
+            sub_child_selected++;
+            if (sub_child_selected >= count) {
+                sub_child_selected = 0;
+            }
+        } while (!sub_parent->children[sub_child_selected].IsVisible(
+                    sub_parent->children, count, sub_child_selected) &&
+                 sub_child_selected != start);
+        
+        // Update scroll offset for visible items
+        UpdateSubScrollOffset();
+    }
+    
+    // Navigate to previous visible SUB child
+    void PrevSubChild() {
+        if (!sub_parent || !sub_parent->children) return;
+        
+        int start = sub_child_selected;
+        int count = sub_parent->child_count;
+        
+        // Find previous visible item
+        do {
+            sub_child_selected--;
+            if (sub_child_selected < 0) {
+                sub_child_selected = count - 1;
+            }
+        } while (!sub_parent->children[sub_child_selected].IsVisible(
+                    sub_parent->children, count, sub_child_selected) &&
+                 sub_child_selected != start);
+        
+        // Update scroll offset for visible items
+        UpdateSubScrollOffset();
+    }
+    
+    // Update scroll offset based on visible items
+    void UpdateSubScrollOffset() {
+        if (!sub_parent || !sub_parent->children) return;
+        
+        // Count visible items before current selection
+        int visible_before = 0;
+        for (int i = 0; i < sub_child_selected; i++) {
+            if (sub_parent->children[i].IsVisible(sub_parent->children, sub_parent->child_count, i)) {
+                visible_before++;
+            }
+        }
+        
+        // Adjust scroll offset based on visible position
+        if (visible_before < scroll_offset) {
+            scroll_offset = visible_before;
+        } else if (visible_before >= scroll_offset + VISIBLE_PARAMS) {
+            scroll_offset = visible_before - VISIBLE_PARAMS + 1;
+        }
+    }
+    
+    // Count visible children in current SUB
+    int CountVisibleSubChildren() const {
+        if (!sub_parent || !sub_parent->children) return 0;
+        
+        int count = 0;
+        for (int i = 0; i < sub_parent->child_count; i++) {
+            if (sub_parent->children[i].IsVisible(sub_parent->children, sub_parent->child_count, i)) {
+                count++;
+            }
+        }
+        return count;
     }
     
     // === Preset Save (CharInput) Methods ===
