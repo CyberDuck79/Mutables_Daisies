@@ -38,6 +38,9 @@ public:
     // Set CV modulation values (called from main before Process)
     void SetCVModulations(float frequency_cv, float timbre_cv, float morph_cv);
     
+    // Set raw CV input values for S&H source (0-1 each)
+    void SetRawCVInputs(float cv1, float cv2, float cv3, float cv4);
+    
     // Reload user data after file change (call voice_->ReloadUserData())
     void ReloadUserData();
     
@@ -53,6 +56,9 @@ private:
     float timbre_cv_;
     float morph_cv_;
     
+    // Raw CV input values for S&H source
+    float cv_inputs_[4];
+    
     // Buffers
     static constexpr size_t kBlockSize = 24;
     static constexpr size_t kBufferSize = 32768;  // Buffer for Plaits engines
@@ -61,7 +67,7 @@ private:
     // Parameters
     static constexpr int kNumParams = 17;  // Bank, Engine, Freq.Rng, Frequency, Harmonics, Timbre, Morph, Level, LPG Color, LPG Decay, Volume, MIDI Ch, User Data (SUB), CV Out 1 (SUB), CV Out 2 (SUB), Save, Load
     static constexpr int kNumUserDataParams = 5;  // 3 FM banks + wavetable + wave terrain
-    static constexpr int kNumCVOutParams = 8;  // Mode, Attack, Release, Shape, Sync, Rate/Ratio, Amp, Phase
+    static constexpr int kNumCVOutParams = 10;  // Mode, Attack, Release, Shape, Slew (RndSmth), SH_Src (S&H), Sync, Rate, Amp, Phase
     std::array<mutables_ui::Parameter, kNumParams> params_;
     std::array<mutables_ui::Parameter, kNumUserDataParams> user_data_params_;  // Children of User Data submenu
     std::array<mutables_ui::Parameter, kNumCVOutParams> cv_out1_params_;  // Children of CV Out 1 submenu

@@ -203,6 +203,49 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
                 param.SetIndex(new_index);
             }
         }
+        
+        // Process SUB children mappings
+        if (param.type == ParamType::SUB && param.children) {
+            for (int j = 0; j < param.child_count; j++) {
+                auto& child = param.children[j];
+                
+                // Handle CC-mapped KNOB parameters - CC replaces knob value
+                if (child.type == ParamType::KNOB && child.mapping.source == MappingSource::CC) {
+                    float cc_value = cc_values[child.mapping.cc_number];
+                    child.SetNormalizedWithHysteresis(cc_value, 0.001f);
+                }
+                // Handle CV-mapped KNOB parameters
+                else if (child.type == ParamType::KNOB && child.mapping.IsCVSource()) {
+                    float cv_value = cv_inputs.GetFiltered(child.mapping.GetCVIndex());
+                    
+                    if (child.mapping.plugged) {
+                        // Plugged mode: CV replaces knob as base, with attenuverter
+                        // CV is 0-1, centered at 0.5 when offset was captured
+                        float cv_signal = (cv_value - child.mapping.offset) * child.mapping.attenuverter;
+                        // Note: In plugged mode, the stored value is the offset, so we use it as center
+                        float mapped = child.mapping.offset + cv_signal;
+                        child.SetNormalizedWithHysteresis(std::clamp(mapped, child.min, child.max), 0.001f);
+                    } else {
+                        // Unplugged mode: CV directly controls the value (0-1)
+                        child.SetNormalizedWithHysteresis(cv_value, 0.001f);
+                    }
+                }
+                // Handle CC-mapped ENUM parameters
+                else if (child.type == ParamType::ENUM && child.mapping.source == MappingSource::CC) {
+                    float cc_value = cc_values[child.mapping.cc_number];
+                    int index = static_cast<int>(cc_value * child.enum_count);
+                    index = std::clamp(index, 0, static_cast<int>(child.enum_count) - 1);
+                    child.SetIndex(index);
+                }
+                // Handle CV-mapped ENUM parameters
+                else if (child.type == ParamType::ENUM && child.mapping.IsCVSource()) {
+                    float cv_value = cv_inputs.GetFiltered(child.mapping.GetCVIndex());
+                    int index = static_cast<int>(cv_value * child.enum_count);
+                    index = std::clamp(index, 0, static_cast<int>(child.enum_count) - 1);
+                    child.SetIndex(index);
+                }
+            }
+        }
     }
     
     // Clear sample-and-hold pending flag after processing
@@ -210,6 +253,14 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     
     // Pass CV modulation values to Plaits
     plaits_module.SetCVModulations(frequency_cv, timbre_cv, morph_cv);
+    
+    // Pass raw CV values for S&H source
+    plaits_module.SetRawCVInputs(
+        std::clamp(cv1, 0.0f, 1.0f),
+        std::clamp(cv2, 0.0f, 1.0f),
+        std::clamp(cv3, 0.0f, 1.0f),
+        std::clamp(cv4, 0.0f, 1.0f)
+    );
     
     // Process gate inputs for module
     // Gate 1: Trigger input for AD envelopes (and MIDI note triggers)
@@ -331,8 +382,15 @@ void UpdateEncoder() {
             auto& current_param = current_params[menu.selected_param];
             
             if (short_press) {
-                // Only enter edit mode for editable params
-                if (current_param.IsEditable()) {
+                // Check if title is selected in SUB (acts as back)
+                if (menu.IsInSub() && menu.IsSubTitleSelected()) {
+                    // Exit SUB back to root menu
+                    int parent_idx = menu.sub_parent_index;
+                    menu.ExitSub();
+                    menu.param_count = plaits_module.GetParameterCount();
+                    menu.selected_param = (parent_idx >= 0) ? parent_idx : 0;
+                    menu.ScrollToSelected();
+                } else if (current_param.IsEditable()) {
                     menu.state = UIState::EditValue;
                 } else if (current_param.type == ParamType::SAVE) {
                     // Enter preset save mode
@@ -363,10 +421,9 @@ void UpdateEncoder() {
                 } else if (current_param.type == ParamType::SUB) {
                     // Enter SUB's children as new menu
                     if (current_param.children && current_param.child_count > 0) {
-                        menu.EnterSub(&current_param);
+                        menu.EnterSub(&current_param, menu.selected_param);
                         menu.param_count = current_param.child_count;
-                        menu.selected_param = 0;
-                        menu.scroll_offset = 0;
+                        menu.selected_param = menu.sub_child_selected >= 0 ? menu.sub_child_selected : 0;
                     }
                 } else if (current_param.type == ParamType::USER_DATA) {
                     // Enter file browser for user data selection
@@ -384,19 +441,13 @@ void UpdateEncoder() {
                     }
                 }
             } else if (long_press_detected) {
-                if (menu.IsInSub()) {
-                    // Exit SUB back to root menu
-                    menu.ExitSub();
-                    menu.param_count = plaits_module.GetParameterCount();
-                    // Keep selected_param pointing to the SUB we just exited
-                    // Find the SUB index
-                    for (int i = 0; i < (int)plaits_module.GetParameterCount(); i++) {
-                        if (params[i].type == ParamType::SUB) {
-                            menu.selected_param = i;
-                            break;
-                        }
+                if (menu.IsInSub() && !menu.IsSubTitleSelected()) {
+                    // In SUB with a child selected - enter mapping submenu if param has mapping
+                    if (current_param.HasMapping()) {
+                        menu.EnterSubmenu(menu.sub_child_selected, 
+                                         current_param.type,
+                                         current_param.mapping);
                     }
-                    menu.ScrollToSelected();
                 } else if (current_param.HasMapping()) {
                     // Enter mapping submenu for params that have one (KNOB, CV, ENUM)
                     menu.EnterSubmenu(menu.selected_param, 
@@ -415,13 +466,19 @@ void UpdateEncoder() {
             auto& param = current_params[menu.selected_param];
             
             if (encoder_increment != 0) {
-                float step = 0.01f;
-                if (param.type == ParamType::ENUM || param.type == ParamType::MIDI) {
-                    step = 1.0f;
-                }
+                // Block editing if parameter is CV-mapped and plugged
+                bool is_cv_plugged = param.mapping.IsCVSource() && param.mapping.plugged;
+                bool is_cc_mapped = param.mapping.source == MappingSource::CC;
                 
-                param.value += encoder_increment * step;
-                param.value = std::clamp(param.value, param.min, param.max);
+                if (!is_cv_plugged && !is_cc_mapped) {
+                    float step = 0.01f;
+                    if (param.type == ParamType::ENUM || param.type == ParamType::MIDI) {
+                        step = 1.0f;
+                    }
+                    
+                    param.value += encoder_increment * step;
+                    param.value = std::clamp(param.value, param.min, param.max);
+                }
             }
             
             if (short_press || long_press_detected) {
@@ -431,7 +488,11 @@ void UpdateEncoder() {
         }
             
         case UIState::Submenu: {
-            auto& param = params[menu.submenu_param_index];
+            // Get the correct parameter - from SUB children if we're in a SUB, otherwise root params
+            mutables_ui::Parameter* submenu_params = menu.IsInSub() && menu.sub_parent 
+                ? menu.sub_parent->children 
+                : params;
+            auto& param = submenu_params[menu.submenu_param_index];
             
             // Navigate submenu items
             if (encoder_increment > 0) {
@@ -485,7 +546,11 @@ void UpdateEncoder() {
         }
             
         case UIState::SubmenuEdit: {
-            auto& param = params[menu.submenu_param_index];
+            // Get the correct parameter - from SUB children if we're in a SUB, otherwise root params
+            mutables_ui::Parameter* submenu_params = menu.IsInSub() && menu.sub_parent 
+                ? menu.sub_parent->children 
+                : params;
+            auto& param = submenu_params[menu.submenu_param_index];
             int item = menu.submenu_selected_item;
             
             if (encoder_increment != 0) {
@@ -561,23 +626,32 @@ void UpdateEncoder() {
         }
         
         case UIState::CharInput: {
-            // Rotate through character set
+            // Rotate through character set (and title)
             if (encoder_increment > 0) menu.NextChar();
             if (encoder_increment < 0) menu.PrevChar();
             
             if (short_press) {
-                // Confirm character and move to next (or backspace if space)
-                menu.ConfirmChar();
+                if (menu.char_title_selected) {
+                    // Title selected: cancel and exit
+                    menu.ExitCharInput();
+                } else {
+                    // Confirm character and move to next (or backspace if space)
+                    menu.ConfirmChar();
+                }
             }
             
             if (long_press_detected) {
-                // Save preset if name is valid
-                if (menu.IsPresetNameValid()) {
+                // Save preset if name is valid (including current unconfirmed char)
+                if (menu.IsFinalPresetNameValid()) {
+                    // Get final name including current character
+                    char final_name[MenuState::MAX_PRESET_NAME_LEN + 1];
+                    menu.GetFinalPresetName(final_name, sizeof(final_name));
+                    
                     // Stop audio during SD write to prevent interrupt contention
                     hw.StopAudio();
                     
                     bool success = preset_manager.SavePreset(
-                        menu.GetPresetName(), 
+                        final_name, 
                         params, 
                         plaits_module.GetParameterCount()
                     );
@@ -586,7 +660,7 @@ void UpdateEncoder() {
                     hw.StartAudio(AudioCallback);
                     
                     if (success) {
-                        display.RenderMessage("Saved!", menu.GetPresetName());
+                        display.RenderMessage("Saved!", final_name);
                     } else {
                         display.RenderMessage("Error", "Save failed");
                     }
@@ -604,8 +678,10 @@ void UpdateEncoder() {
             if (encoder_increment < 0) menu.PrevPreset();
             
             if (short_press) {
-                // Load selected preset
-                if (menu.preset_count > 0) {
+                if (menu.preset_title_selected) {
+                    // Title selected: cancel and exit
+                    menu.ExitPresetList();
+                } else if (menu.preset_count > 0) {
                     const char* preset_name = preset_manager.GetPresetName(menu.GetSelectedPreset());
                     if (preset_name) {
                         // Stop audio during SD read to prevent interrupt contention
@@ -804,7 +880,11 @@ void UpdateDisplay() {
         const char* title = current_params[menu.file_browser_param_idx].name;
         display.RenderFileBrowser(menu, title, GetUserDataFileNameCallback);
     } else if (menu.IsInSubmenu() && menu.submenu_param_index >= 0) {
-        display.RenderSubmenu(menu, params[menu.submenu_param_index]);
+        // Get the correct parameter - either from SUB children or root params
+        mutables_ui::Parameter* submenu_params = menu.IsInSub() && menu.sub_parent 
+            ? menu.sub_parent->children 
+            : params;
+        display.RenderSubmenu(menu, submenu_params[menu.submenu_param_index]);
     } else if (menu.IsInSub() && menu.sub_parent) {
         // Browsing SUB's children with visibility support
         display.RenderSubMenu(menu, menu.sub_parent);

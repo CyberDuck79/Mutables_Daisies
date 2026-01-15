@@ -15,7 +15,8 @@ enum class ParamType {
     SUB,        // Submenu container
     SAVE,       // Preset save action
     LOAD,       // Preset load action
-    USER_DATA   // User data file selector (shows filename, triggers file browser)
+    USER_DATA,  // User data file selector (shows filename, triggers file browser)
+    BACK        // Back button to exit SUB submenu
 };
 
 // Mapping source options
@@ -212,6 +213,14 @@ struct Parameter {
         return p;
     }
     
+    // BACK constructor (for exiting SUB submenus)
+    static Parameter Back() {
+        Parameter p;
+        p.name = "Back";
+        p.type = ParamType::BACK;
+        return p;
+    }
+    
     // USER_DATA constructor
     static Parameter UserData(const char* name, uint8_t target) {
         Parameter p;
@@ -328,6 +337,13 @@ struct Parameter {
             // Default formatting
             if (type == ParamType::ENUM && enum_labels) {
                 snprintf(buffer, buffer_size, "%.6s", GetEnumLabel());
+            } else if (type == ParamType::USER_DATA) {
+                // Show filename or "Default" if not set
+                if (user_data_filename[0] != '\0') {
+                    snprintf(buffer, buffer_size, "%.7s", user_data_filename);
+                } else {
+                    snprintf(buffer, buffer_size, "origin");
+                }
             } else {
                 int val_int = (int)(value * 100.0f);
                 int whole = val_int / 100;

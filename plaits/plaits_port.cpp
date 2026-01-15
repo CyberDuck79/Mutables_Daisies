@@ -70,7 +70,7 @@ const char* PlaitsPort::new_engine_names_[] = {
 
 // CV Output mode names
 static const char* cv_out_mode_names[] = {
-    "LPG Env",   // Follows internal LPG envelope
+    "LPG",       // Follows internal LPG envelope
     "AD",        // AD envelope triggered on gate
     "LFO"        // Low frequency oscillator
 };
@@ -83,7 +83,7 @@ static const char* lfo_shape_names[] = {
     "Saw",
     "Square",
     "S&H",
-    "RndSmth"
+    "Smooth"
 };
 static constexpr int kNumLFOShapes = 6;
 
@@ -94,6 +94,16 @@ static const char* sync_names[] = {
     "Gate2"
 };
 static constexpr int kNumSyncModes = 3;
+
+// S&H source names
+static const char* sh_source_names[] = {
+    "Random",
+    "CV1",
+    "CV2",
+    "CV3",
+    "CV4"
+};
+static constexpr int kNumSHSources = 5;
 
 // Clock ratio names for display when MIDI sync is enabled
 static const char* clock_ratio_names[] = {
@@ -111,20 +121,23 @@ enum CVOutParamIndex {
     CVOUT_ATTACK = 1,
     CVOUT_RELEASE = 2,
     CVOUT_SHAPE = 3,
-    CVOUT_SYNC = 4,
-    CVOUT_RATE = 5,
-    CVOUT_AMP = 6,
-    CVOUT_PHASE = 7
+    CVOUT_SLEW = 4,      // Slew amount for RndSmth mode (right after Shape)
+    CVOUT_SH_SRC = 5,    // S&H source (right after Shape)
+    CVOUT_SYNC = 6,
+    CVOUT_RATE = 7,
+    CVOUT_AMP = 8,
+    CVOUT_PHASE = 9
 };
 
 // Visibility callback for CV Out params
 // Mode 0 = LPG Env: only show Amp
 // Mode 1 = AD: show Attack, Release, Amp
-// Mode 2 = LFO: show Shape, Sync, Rate, Amp, Phase
+// Mode 2 = LFO: show Shape, Slew/SH_Src (based on shape), Sync, Rate, Amp, Phase
 static bool CVOutVisibilityCallback(const mutables_ui::Parameter* siblings, uint8_t sibling_count, uint8_t param_index) {
     if (sibling_count < 1) return true;
     
     int mode = siblings[CVOUT_MODE].GetIndex();
+    int shape = (sibling_count > CVOUT_SHAPE) ? siblings[CVOUT_SHAPE].GetIndex() : 0;
     
     switch (param_index) {
         case CVOUT_MODE:
@@ -133,10 +146,16 @@ static bool CVOutVisibilityCallback(const mutables_ui::Parameter* siblings, uint
         case CVOUT_RELEASE:
             return (mode == 1);  // Only for AD mode
         case CVOUT_SHAPE:
-        case CVOUT_SYNC:
-        case CVOUT_PHASE:
             return (mode == 2);  // Only for LFO mode
+        case CVOUT_SLEW:
+            // Only visible for LFO mode AND RndSmth shape (index 5)
+            return (mode == 2) && (shape == 5);
+        case CVOUT_SH_SRC:
+            // Only visible for LFO mode AND S&H shape (index 4)
+            return (mode == 2) && (shape == 4);
+        case CVOUT_SYNC:
         case CVOUT_RATE:
+        case CVOUT_PHASE:
             return (mode == 2);  // Only for LFO mode
         case CVOUT_AMP:
             return true;  // Always visible
@@ -221,7 +240,12 @@ static void CVOutFormatCallback(const mutables_ui::Parameter* param,
             
         case CVOUT_PHASE:
             // Degrees 0-360
-            snprintf(buffer, buffer_size, "%d", static_cast<int>(value * 360.0f + 0.5f));
+            snprintf(buffer, buffer_size, "%ddeg", static_cast<int>(value * 360.0f + 0.5f));
+            break;
+            
+        case CVOUT_SLEW:
+            // Slew amount as percentage (0% = instant, 100% = very slow)
+            snprintf(buffer, buffer_size, "%d%%", static_cast<int>(value * 100.0f + 0.5f));
             break;
             
         default:
@@ -317,33 +341,33 @@ void PlaitsPort::SetupParameters() {
     // MODEL (Bank/Engine) -> FREQUENCY -> HARMONICS -> TIMBRE -> MORPH
     // ==========================================================================
     
+    // Frequency - HAS native attenuverter (patch->frequency_modulation_amount)
+    params_[2] = mutables_ui::Parameter::Knob("Frequency", 0.0f, 1.0f, 0.5f);
+    
+    // Harmonics - NO native attenuverter in Plaits, we handle it
+    params_[3] = mutables_ui::Parameter::Knob("Harmonics", 0.0f, 1.0f, 0.5f);
+    
+    // Timbre - HAS native attenuverter (patch->timbre_modulation_amount)
+    params_[4] = mutables_ui::Parameter::Knob("Timbre", 0.0f, 1.0f, 0.5f);
+    
+    // Morph - HAS native attenuverter (patch->morph_modulation_amount)
+    params_[5] = mutables_ui::Parameter::Knob("Morph", 0.0f, 1.0f, 0.5f);
+    
+    // Output level - CV input type (direct input, no attenuverter emulation)
+    params_[6] = mutables_ui::Parameter::CV("Level");
+    params_[6].value = 0.8f;  // Default level
+    
+    // LPG Color - NO native attenuverter, we handle it
+    params_[7] = mutables_ui::Parameter::Knob("LPG Color", 0.0f, 1.0f, 0.5f);
+    
+    // LPG Decay - NO native attenuverter, we handle it
+    params_[8] = mutables_ui::Parameter::Knob("LPG Decay", 0.0f, 1.0f, 0.5f);
+
     // Frequency Range - selects octave range for the Frequency knob
     // C0-C8: individual octaves with ±7 semitone fine tuning
     // C0-C8 (full): full 8-octave range
-    params_[2] = mutables_ui::Parameter::Enum("Freq. Rng", freq_range_names_, kNumFreqRanges);
-    params_[2].SetIndex(4);  // Default to C4 (middle C)
-    
-    // Frequency - HAS native attenuverter (patch->frequency_modulation_amount)
-    params_[3] = mutables_ui::Parameter::Knob("Frequency", 0.0f, 1.0f, 0.5f);
-    
-    // Harmonics - NO native attenuverter in Plaits, we handle it
-    params_[4] = mutables_ui::Parameter::Knob("Harmonics", 0.0f, 1.0f, 0.5f);
-    
-    // Timbre - HAS native attenuverter (patch->timbre_modulation_amount)
-    params_[5] = mutables_ui::Parameter::Knob("Timbre", 0.0f, 1.0f, 0.5f);
-    
-    // Morph - HAS native attenuverter (patch->morph_modulation_amount)
-    params_[6] = mutables_ui::Parameter::Knob("Morph", 0.0f, 1.0f, 0.5f);
-    
-    // Output level - CV input type (direct input, no attenuverter emulation)
-    params_[7] = mutables_ui::Parameter::CV("Level");
-    params_[7].value = 0.8f;  // Default level
-    
-    // LPG Color - NO native attenuverter, we handle it
-    params_[8] = mutables_ui::Parameter::Knob("LPG Color", 0.0f, 1.0f, 0.5f);
-    
-    // LPG Decay - NO native attenuverter, we handle it
-    params_[9] = mutables_ui::Parameter::Knob("LPG Decay", 0.0f, 1.0f, 0.5f);
+    params_[9] = mutables_ui::Parameter::Enum("Freq. Rng", freq_range_names_, kNumFreqRanges);
+    params_[9].SetIndex(4);  // Default to C4 (middle C)
     
     // Volume - scales output level (1.0 = full, useful for eurorack compatibility)
     // Can add velocity mod for standard velocity->volume behavior
@@ -385,12 +409,18 @@ void PlaitsPort::SetupCVOutParams(std::array<mutables_ui::Parameter, kNumCVOutPa
     
     // LFO params (used when mode = LFO)
     params[3] = mutables_ui::Parameter::Enum("Shape", lfo_shape_names, kNumLFOShapes);
-    params[4] = mutables_ui::Parameter::Enum("Sync", sync_names, kNumSyncModes);
-    params[5] = mutables_ui::Parameter::Knob("Rate", 0.0f, 1.0f, 0.3f);       // 0.1-20Hz free, or ratio index when synced
+    
+    // Shape-specific params (right after Shape for visibility)
+    params[4] = mutables_ui::Parameter::Knob("Slew", 0.0f, 1.0f, 0.5f);       // RndSmth slew amount (0=fast, 1=slow)
+    params[5] = mutables_ui::Parameter::Enum("SH Src", sh_source_names, kNumSHSources);  // S&H source
+    
+    // More LFO params
+    params[6] = mutables_ui::Parameter::Enum("Sync", sync_names, kNumSyncModes);
+    params[7] = mutables_ui::Parameter::Knob("Rate", 0.0f, 1.0f, 0.3f);       // 0.1-20Hz free, or ratio index when synced
     
     // Common params
-    params[6] = mutables_ui::Parameter::Knob("Amp", 0.0f, 1.0f, 1.0f);        // Output amplitude scaling
-    params[7] = mutables_ui::Parameter::Knob("Phase", 0.0f, 1.0f, 0.0f);      // LFO initial phase offset (0-360°)
+    params[8] = mutables_ui::Parameter::Knob("Amp", 0.0f, 1.0f, 1.0f);        // Output amplitude scaling
+    params[9] = mutables_ui::Parameter::Knob("Phase", 0.0f, 1.0f, 0.0f);      // LFO initial phase offset (0-360°)
     
     // Assign visibility and format callbacks to all params
     for (int i = 0; i < kNumCVOutParams; i++) {
@@ -529,6 +559,13 @@ void PlaitsPort::SetCVModulations(float frequency_cv, float timbre_cv, float mor
     morph_cv_ = morph_cv;
 }
 
+void PlaitsPort::SetRawCVInputs(float cv1, float cv2, float cv3, float cv4) {
+    cv_inputs_[0] = cv1;
+    cv_inputs_[1] = cv2;
+    cv_inputs_[2] = cv3;
+    cv_inputs_[3] = cv4;
+}
+
 void PlaitsPort::ReloadUserData() {
     if (voice_) {
         voice_->ReloadUserData();
@@ -580,8 +617,8 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         // Process CV modulators (once per audio block)
         // Get LPG envelope from voice for LPG_ENV mode
         float lpg_gain = voice_->GetLPGGain();
-        cv_modulator_1_.Process(lpg_gain, midi_clock_hz_, gate2_clock_hz_);
-        cv_modulator_2_.Process(lpg_gain, midi_clock_hz_, gate2_clock_hz_);
+        cv_modulator_1_.Process(lpg_gain, midi_clock_hz_, gate2_clock_hz_, cv_inputs_);
+        cv_modulator_2_.Process(lpg_gain, midi_clock_hz_, gate2_clock_hz_, cv_inputs_);
         
         // Get volume with velocity modulation
         float vol_vel = midi_velocity_ * params_[10].mapping.velocity_amount;
@@ -640,24 +677,28 @@ float PlaitsPort::GetCVOutput(int cv_index) {
 
 void PlaitsPort::UpdateCVModulatorsFromParams() {
     // Update CV modulator 1 from its params
-    cv_modulator_1_.SetMode(static_cast<CVOutMode>(cv_out1_params_[0].GetIndex()));
-    cv_modulator_1_.SetAttack(cv_out1_params_[1].value);
-    cv_modulator_1_.SetRelease(cv_out1_params_[2].value);
-    cv_modulator_1_.SetLFOShape(static_cast<LFOShape>(cv_out1_params_[3].GetIndex()));
-    cv_modulator_1_.SetSyncMode(static_cast<SyncMode>(cv_out1_params_[4].GetIndex()));
-    cv_modulator_1_.SetRate(cv_out1_params_[5].value);
-    cv_modulator_1_.SetAmp(cv_out1_params_[6].value);
-    cv_modulator_1_.SetPhaseOffset(cv_out1_params_[7].value);
+    cv_modulator_1_.SetMode(static_cast<CVOutMode>(cv_out1_params_[CVOUT_MODE].GetIndex()));
+    cv_modulator_1_.SetAttack(cv_out1_params_[CVOUT_ATTACK].value);
+    cv_modulator_1_.SetRelease(cv_out1_params_[CVOUT_RELEASE].value);
+    cv_modulator_1_.SetLFOShape(static_cast<LFOShape>(cv_out1_params_[CVOUT_SHAPE].GetIndex()));
+    cv_modulator_1_.SetSlewAmount(cv_out1_params_[CVOUT_SLEW].value);
+    cv_modulator_1_.SetSHSource(static_cast<SHSource>(cv_out1_params_[CVOUT_SH_SRC].GetIndex()));
+    cv_modulator_1_.SetSyncMode(static_cast<SyncMode>(cv_out1_params_[CVOUT_SYNC].GetIndex()));
+    cv_modulator_1_.SetRate(cv_out1_params_[CVOUT_RATE].value);
+    cv_modulator_1_.SetAmp(cv_out1_params_[CVOUT_AMP].value);
+    cv_modulator_1_.SetPhaseOffset(cv_out1_params_[CVOUT_PHASE].value);
     
     // Update CV modulator 2 from its params
-    cv_modulator_2_.SetMode(static_cast<CVOutMode>(cv_out2_params_[0].GetIndex()));
-    cv_modulator_2_.SetAttack(cv_out2_params_[1].value);
-    cv_modulator_2_.SetRelease(cv_out2_params_[2].value);
-    cv_modulator_2_.SetLFOShape(static_cast<LFOShape>(cv_out2_params_[3].GetIndex()));
-    cv_modulator_2_.SetSyncMode(static_cast<SyncMode>(cv_out2_params_[4].GetIndex()));
-    cv_modulator_2_.SetRate(cv_out2_params_[5].value);
-    cv_modulator_2_.SetAmp(cv_out2_params_[6].value);
-    cv_modulator_2_.SetPhaseOffset(cv_out2_params_[7].value);
+    cv_modulator_2_.SetMode(static_cast<CVOutMode>(cv_out2_params_[CVOUT_MODE].GetIndex()));
+    cv_modulator_2_.SetAttack(cv_out2_params_[CVOUT_ATTACK].value);
+    cv_modulator_2_.SetRelease(cv_out2_params_[CVOUT_RELEASE].value);
+    cv_modulator_2_.SetLFOShape(static_cast<LFOShape>(cv_out2_params_[CVOUT_SHAPE].GetIndex()));
+    cv_modulator_2_.SetSlewAmount(cv_out2_params_[CVOUT_SLEW].value);
+    cv_modulator_2_.SetSHSource(static_cast<SHSource>(cv_out2_params_[CVOUT_SH_SRC].GetIndex()));
+    cv_modulator_2_.SetSyncMode(static_cast<SyncMode>(cv_out2_params_[CVOUT_SYNC].GetIndex()));
+    cv_modulator_2_.SetRate(cv_out2_params_[CVOUT_RATE].value);
+    cv_modulator_2_.SetAmp(cv_out2_params_[CVOUT_AMP].value);
+    cv_modulator_2_.SetPhaseOffset(cv_out2_params_[CVOUT_PHASE].value);
 }
 
 void PlaitsPort::OnMIDIClock() {

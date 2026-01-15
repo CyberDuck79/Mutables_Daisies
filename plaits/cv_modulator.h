@@ -30,6 +30,15 @@ enum class LFOShape {
     RAND_SMOOTH   // Random with slew
 };
 
+// S&H source options
+enum class SHSource {
+    RANDOM = 0,
+    CV1,
+    CV2,
+    CV3,
+    CV4
+};
+
 // Clock sync ratios
 // T = triplet (2/3 of normal), D = dotted (3/2 of normal)
 enum class ClockRatio {
@@ -89,6 +98,8 @@ public:
         rate_ = 1.0f;      // 1 Hz default (or ratio index)
         amp_ = 1.0f;       // Full amplitude
         phase_offset_ = 0.0f;  // 0-1 normalized
+        slew_amount_ = 0.5f;   // RndSmth slew amount (0=instant, 1=very slow)
+        sh_source_ = SHSource::RANDOM;  // S&H source
         
         // State
         env_value_ = 0.0f;
@@ -125,7 +136,8 @@ public:
     }
     
     // Process one block - returns output value (0.0 to 1.0)
-    float Process(float lpg_gain, float midi_clock_hz, float gate2_clock_hz) {
+    // cv_values: array of 4 CV input values (0-1) for S&H source
+    float Process(float lpg_gain, float midi_clock_hz, float gate2_clock_hz, const float* cv_values = nullptr) {
         float raw_output = 0.0f;
         
         switch (mode_) {
@@ -138,7 +150,7 @@ public:
                 break;
                 
             case CVOutMode::LFO:
-                raw_output = ProcessLFO(midi_clock_hz, gate2_clock_hz);
+                raw_output = ProcessLFO(midi_clock_hz, gate2_clock_hz, cv_values);
                 break;
         }
         
@@ -158,6 +170,8 @@ public:
     void SetRate(float rate) { rate_ = rate; }
     void SetAmp(float amp) { amp_ = amp; }
     void SetPhaseOffset(float phase) { phase_offset_ = phase; }
+    void SetSlewAmount(float slew) { slew_amount_ = slew; }
+    void SetSHSource(SHSource source) { sh_source_ = source; }
     
     // Getters
     CVOutMode GetMode() const { return mode_; }
@@ -201,7 +215,7 @@ private:
     }
     
     // LFO processing
-    float ProcessLFO(float midi_clock_hz, float gate2_clock_hz) {
+    float ProcessLFO(float midi_clock_hz, float gate2_clock_hz, const float* cv_values) {
         // Calculate frequency based on sync mode
         float freq;
         float clock_hz = 0.0f;
@@ -271,9 +285,18 @@ private:
                 break;
                 
             case LFOShape::SH:
-                // Sample new random value when phase wraps
+                // Sample new value when phase wraps
                 if (phase_wrapped) {
-                    sh_value_ = 2.0f * (static_cast<float>(rand()) / RAND_MAX) - 1.0f;
+                    if (sh_source_ == SHSource::RANDOM) {
+                        // Random source: -1 to 1
+                        sh_value_ = 2.0f * (static_cast<float>(rand()) / RAND_MAX) - 1.0f;
+                    } else if (cv_values != nullptr) {
+                        // CV source: convert 0-1 to -1 to 1
+                        int cv_idx = static_cast<int>(sh_source_) - 1;  // CV1=0, CV2=1, etc.
+                        if (cv_idx >= 0 && cv_idx < 4) {
+                            sh_value_ = 2.0f * cv_values[cv_idx] - 1.0f;
+                        }
+                    }
                 }
                 wave = sh_value_;
                 break;
@@ -283,8 +306,11 @@ private:
                 if (phase_wrapped) {
                     random_target_ = 2.0f * (static_cast<float>(rand()) / RAND_MAX) - 1.0f;
                 }
-                // Slew towards target (faster than output slew)
-                sh_value_ += 0.1f * (random_target_ - sh_value_);
+                // Configurable slew: slew_amount_ 0=fast (0.5 coeff), 1=slow (0.01 coeff)
+                {
+                    float slew_coeff = 0.5f * powf(0.02f, slew_amount_);  // 0.5 to 0.01
+                    sh_value_ += slew_coeff * (random_target_ - sh_value_);
+                }
                 wave = sh_value_;
                 break;
         }
@@ -302,6 +328,8 @@ private:
     float rate_;
     float amp_;
     float phase_offset_;
+    float slew_amount_;
+    SHSource sh_source_;
     
     // State
     float env_value_;

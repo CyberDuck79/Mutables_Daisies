@@ -51,7 +51,8 @@ struct MenuState {
     
     // For SUB type: track if we're inside a SUB's children
     Parameter* sub_parent;        // Non-null if browsing SUB children
-    int sub_child_selected;       // Selected child in SUB
+    int sub_parent_index;         // Index of the SUB in root params (to return to correct position)
+    int sub_child_selected;       // Selected child in SUB (-1 = title/back selected)
     
     // For preset Save (CharInput state)
     static constexpr int MAX_PRESET_NAME_LEN = 16;
@@ -63,6 +64,7 @@ struct MenuState {
     int preset_selected;          // Selected preset in list
     int preset_scroll_offset;     // Scroll offset for preset list
     int preset_count;             // Total presets found
+    bool preset_title_selected;   // True if title bar is selected
     
     // For file browser (FileBrowser state for USER_DATA)
     int file_selected;            // Selected file in list
@@ -87,6 +89,7 @@ struct MenuState {
         , submenu_selected_item(0)
         , submenu_scroll_offset(0)
         , sub_parent(nullptr)
+        , sub_parent_index(-1)
         , sub_child_selected(0)
         , char_position(0)
         , char_index(0)
@@ -249,10 +252,11 @@ struct MenuState {
     }
     
     // Enter SUB parameter's children
-    void EnterSub(Parameter* sub_param) {
+    void EnterSub(Parameter* sub_param, int parent_index) {
         sub_parent = sub_param;
-        // Find first visible child
-        sub_child_selected = 0;
+        sub_parent_index = parent_index;
+        // Start with first visible child selected (not title)
+        sub_child_selected = -1;  // Will be advanced to first visible
         if (sub_param && sub_param->children) {
             for (int i = 0; i < sub_param->child_count; i++) {
                 if (sub_param->children[i].IsVisible(sub_param->children, sub_param->child_count, i)) {
@@ -261,13 +265,21 @@ struct MenuState {
                 }
             }
         }
+        scroll_offset = 0;  // Reset scroll when entering
         // param_count will be updated by caller
     }
     
     // Exit SUB back to root
     void ExitSub() {
         sub_parent = nullptr;
+        sub_parent_index = -1;
         sub_child_selected = 0;
+        scroll_offset = 0;
+    }
+    
+    // Check if title/back is selected in SUB
+    bool IsSubTitleSelected() const {
+        return sub_parent != nullptr && sub_child_selected == -1;
     }
     
     bool IsInSub() const {
@@ -278,14 +290,31 @@ struct MenuState {
     void NextSubChild() {
         if (!sub_parent || !sub_parent->children) return;
         
-        int start = sub_child_selected;
         int count = sub_parent->child_count;
+        
+        if (sub_child_selected == -1) {
+            // Currently on title, move to first visible child
+            for (int i = 0; i < count; i++) {
+                if (sub_parent->children[i].IsVisible(sub_parent->children, count, i)) {
+                    sub_child_selected = i;
+                    UpdateSubScrollOffset();
+                    return;
+                }
+            }
+            // No visible children, stay on title
+            return;
+        }
+        
+        int start = sub_child_selected;
         
         // Find next visible item
         do {
             sub_child_selected++;
             if (sub_child_selected >= count) {
-                sub_child_selected = 0;
+                // Wrap to title
+                sub_child_selected = -1;
+                scroll_offset = 0;
+                return;
             }
         } while (!sub_parent->children[sub_child_selected].IsVisible(
                     sub_parent->children, count, sub_child_selected) &&
@@ -299,14 +328,31 @@ struct MenuState {
     void PrevSubChild() {
         if (!sub_parent || !sub_parent->children) return;
         
-        int start = sub_child_selected;
         int count = sub_parent->child_count;
+        
+        if (sub_child_selected == -1) {
+            // Currently on title, move to last visible child
+            for (int i = count - 1; i >= 0; i--) {
+                if (sub_parent->children[i].IsVisible(sub_parent->children, count, i)) {
+                    sub_child_selected = i;
+                    UpdateSubScrollOffset();
+                    return;
+                }
+            }
+            // No visible children, stay on title
+            return;
+        }
+        
+        int start = sub_child_selected;
         
         // Find previous visible item
         do {
             sub_child_selected--;
             if (sub_child_selected < 0) {
-                sub_child_selected = count - 1;
+                // Wrap to title
+                sub_child_selected = -1;
+                scroll_offset = 0;
+                return;
             }
         } while (!sub_parent->children[sub_child_selected].IsVisible(
                     sub_parent->children, count, sub_child_selected) &&
@@ -357,15 +403,40 @@ struct MenuState {
         preset_name[0] = '\0';
         char_position = 0;
         char_index = 0;  // Start at 'a'
+        char_title_selected = false;  // Start on first character, not title
     }
+    
+    // Flag for title selection in CharInput
+    bool char_title_selected;
     
     // Rotate through character set
     void NextChar() {
-        char_index = (char_index + 1) % kCharSetSize;
+        if (char_title_selected) {
+            // From title, go to first char
+            char_title_selected = false;
+        } else {
+            if (char_index == kCharSetSize - 1) {
+                // From last char (space), go to title
+                char_title_selected = true;
+            } else {
+                char_index++;
+            }
+        }
     }
     
     void PrevChar() {
-        char_index = (char_index - 1 + kCharSetSize) % kCharSetSize;
+        if (char_title_selected) {
+            // From title, go to last char (space)
+            char_title_selected = false;
+            char_index = kCharSetSize - 1;
+        } else {
+            if (char_index == 0) {
+                // From first char, go to title
+                char_title_selected = true;
+            } else {
+                char_index--;
+            }
+        }
     }
     
     // Get current character being selected
@@ -421,14 +492,42 @@ struct MenuState {
         preset_name[0] = '\0';
     }
     
-    // Check if preset name is valid (non-empty)
+    // Check if preset name is valid (non-empty, or has current char)
     bool IsPresetNameValid() const {
-        return char_position > 0;
+        return char_position > 0 || (!char_title_selected && char_index != kCharSetSize - 1);  // space is last
     }
     
-    // Get the current preset name
+    // Get the current preset name (without unconfirmed char)
     const char* GetPresetName() const {
         return preset_name;
+    }
+    
+    // Get the final preset name including unconfirmed current character
+    // Returns length of final name
+    int GetFinalPresetName(char* buffer, size_t buffer_size) const {
+        int len = strlen(preset_name);
+        if (len < (int)buffer_size - 1) {
+            strcpy(buffer, preset_name);
+            // Add current character if it's not space and we're not on title
+            if (!char_title_selected && char_position < MAX_PRESET_NAME_LEN) {
+                char c = GetCurrentChar();
+                if (c != ' ') {
+                    buffer[len] = c;
+                    buffer[len + 1] = '\0';
+                    len++;
+                }
+            }
+        }
+        return len;
+    }
+    
+    // Check if final name (with current char) is valid
+    bool IsFinalPresetNameValid() const {
+        if (char_title_selected) return false;
+        if (char_position > 0) return true;
+        // Empty but has non-space current char
+        char c = GetCurrentChar();
+        return c != ' ';
     }
     
     // === Preset Load (PresetList) Methods ===
@@ -439,19 +538,42 @@ struct MenuState {
         preset_count = count;
         preset_selected = 0;
         preset_scroll_offset = 0;
+        preset_title_selected = false;
     }
     
     // Navigate preset list
     void NextPreset() {
-        if (preset_count == 0) return;
-        preset_selected = (preset_selected + 1) % preset_count;
-        ScrollPresetToSelected();
+        if (preset_title_selected) {
+            // From title, go to first preset
+            preset_title_selected = false;
+            preset_selected = 0;
+            ScrollPresetToSelected();
+        } else if (preset_count == 0) {
+            return;
+        } else if (preset_selected == preset_count - 1) {
+            // From last preset, go to title
+            preset_title_selected = true;
+        } else {
+            preset_selected++;
+            ScrollPresetToSelected();
+        }
     }
     
     void PrevPreset() {
-        if (preset_count == 0) return;
-        preset_selected = (preset_selected - 1 + preset_count) % preset_count;
-        ScrollPresetToSelected();
+        if (preset_title_selected) {
+            // From title, go to last preset
+            preset_title_selected = false;
+            preset_selected = preset_count > 0 ? preset_count - 1 : 0;
+            ScrollPresetToSelected();
+        } else if (preset_count == 0) {
+            return;
+        } else if (preset_selected == 0) {
+            // From first preset, go to title
+            preset_title_selected = true;
+        } else {
+            preset_selected--;
+            ScrollPresetToSelected();
+        }
     }
     
     void ScrollPresetToSelected() {

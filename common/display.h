@@ -58,25 +58,27 @@ public:
         
         hw_->display.Fill(false);
         
-        // Title bar with parent name
+        // Title bar with parent name - selectable as "back" button
+        bool title_selected = (menu.sub_child_selected == -1);
         char title[20];
-        snprintf(title, sizeof(title), "%.12s", parent->name);
-        hw_->display.SetCursor(0, 0);
-        hw_->display.WriteString(title, Font_6x8, true);
-        hw_->display.DrawLine(0, 9, 127, 9, true);
-        
-        int line = 12;
-        int visible_idx = 0;
-        int visible_scroll = 0;  // Count visible items before scroll offset
-        
-        // First pass: count visible items before current scroll offset to know effective offset
-        for (int i = 0; i < menu.scroll_offset && i < parent->child_count; i++) {
-            if (parent->children[i].IsVisible(parent->children, parent->child_count, i)) {
-                visible_scroll++;
-            }
+        if (title_selected) {
+            snprintf(title, sizeof(title), "< %.10s", parent->name);
+            // Draw white background for selected title
+            hw_->display.DrawRect(0, 0, 127, 9, true, true);
+            hw_->display.SetCursor(0, 0);
+            hw_->display.WriteString(title, Font_6x8, false);  // Inverted
+        } else {
+            snprintf(title, sizeof(title), "%.12s", parent->name);
+            hw_->display.SetCursor(0, 0);
+            hw_->display.WriteString(title, Font_6x8, true);
+            hw_->display.DrawLine(0, 9, 127, 9, true);
         }
         
-        // Render visible items
+        int line = 12;
+        int visible_count = 0;  // Count of visible items we've seen
+        int rendered_count = 0;  // Count of items we've rendered
+        
+        // Render visible items, skipping based on scroll offset
         for (int param_idx = 0; param_idx < parent->child_count && line < 64; param_idx++) {
             Parameter& param = parent->children[param_idx];
             
@@ -85,9 +87,9 @@ public:
                 continue;  // Skip invisible params
             }
             
-            // Skip items before scroll offset
-            if (visible_idx < visible_scroll) {
-                visible_idx++;
+            // Skip items before scroll offset (scroll_offset is a visible-item count)
+            if (visible_count < menu.scroll_offset) {
+                visible_count++;
                 continue;
             }
             
@@ -97,10 +99,11 @@ public:
                               param_idx == menu.sub_child_selected,
                               menu.state == UIState::EditValue && param_idx == menu.sub_child_selected);
             line += 13;
-            visible_idx++;
+            visible_count++;
+            rendered_count++;
             
             // Stop after visible params limit
-            if (visible_idx - visible_scroll >= MenuState::VISIBLE_PARAMS) break;
+            if (rendered_count >= MenuState::VISIBLE_PARAMS) break;
         }
         
         hw_->display.Update();
@@ -116,6 +119,12 @@ public:
         snprintf(buffer, sizeof(buffer), "%.10s", param.name);
         int name_len = strlen(buffer);
         hw_->display.WriteString(buffer, Font_7x10, true);
+        
+        // Mapping indicator '*' right after name
+        if (param.mapping.source != MappingSource::NONE) {
+            hw_->display.SetCursor(name_len * 7, y + 1);
+            hw_->display.WriteString("*", Font_7x10, true);
+        }
         
         // Underline if selected
         if (selected) {
@@ -140,8 +149,8 @@ public:
             hw_->display.WriteString(buffer, Font_7x10, !editing);
         }
         
-        // Submenu indicator
-        if (param.HasSubmenu()) {
+        // Submenu indicator (only for SUB type, not mappable params)
+        if (param.type == ParamType::SUB) {
             hw_->display.SetCursor(121, y + 1);
             hw_->display.WriteString(">", Font_7x10, true);
         }
@@ -360,9 +369,16 @@ public:
         
         hw_->display.Fill(false);
         
-        // Title
-        hw_->display.SetCursor(0, 1);
-        hw_->display.WriteString("Save Preset", Font_7x10, true);
+        // Title - smaller font with underline, like submenu
+        if (menu.char_title_selected) {
+            hw_->display.DrawRect(0, 0, 127, 9, true, true);  // White background
+            hw_->display.SetCursor(0, 0);
+            hw_->display.WriteString("< Save Preset", Font_6x8, false);  // Inverted
+        } else {
+            hw_->display.SetCursor(0, 0);
+            hw_->display.WriteString("Save Preset", Font_6x8, true);
+            hw_->display.DrawLine(0, 9, 127, 9, true);  // Underline
+        }
         
         // Current name with cursor
         char display_name[20];
@@ -372,7 +388,7 @@ public:
         for (int i = 0; i < MenuState::MAX_PRESET_NAME_LEN; i++) {
             if (i < name_len) {
                 display_name[i] = menu.preset_name[i];
-            } else if (i == menu.char_position) {
+            } else if (i == menu.char_position && !menu.char_title_selected) {
                 display_name[i] = menu.GetCurrentChar();
             } else {
                 display_name[i] = '_';
@@ -393,16 +409,18 @@ public:
         line2[8] = '\0';
         hw_->display.WriteString(line2, Font_7x10, true);
         
-        // Cursor underline
-        int cursor_row = menu.char_position / 8;
-        int cursor_col = menu.char_position % 8;
-        int cursor_x = 8 + cursor_col * 7;
-        int cursor_y = (cursor_row == 0) ? 31 : 43;
-        hw_->display.DrawLine(cursor_x, cursor_y, cursor_x + 6, cursor_y, true);
+        // Cursor underline (only if not on title)
+        if (!menu.char_title_selected) {
+            int cursor_row = menu.char_position / 8;
+            int cursor_col = menu.char_position % 8;
+            int cursor_x = 8 + cursor_col * 7;
+            int cursor_y = (cursor_row == 0) ? 31 : 43;
+            hw_->display.DrawLine(cursor_x, cursor_y, cursor_x + 6, cursor_y, true);
+        }
         
         // Instructions
         hw_->display.SetCursor(0, 54);
-        hw_->display.WriteString("rot:chr prs:nxt hld:save", Font_6x8, true);
+        hw_->display.WriteString("press:next  hold:save", Font_6x8, true);
         
         hw_->display.Update();
     }
@@ -413,19 +431,26 @@ public:
         
         hw_->display.Fill(false);
         
-        // Title
-        hw_->display.SetCursor(0, 1);
-        hw_->display.WriteString("Load Preset", Font_7x10, true);
+        // Title - smaller font with underline, like submenu
+        if (menu.preset_title_selected) {
+            hw_->display.DrawRect(0, 0, 127, 9, true, true);  // White background
+            hw_->display.SetCursor(0, 0);
+            hw_->display.WriteString("< Load Preset", Font_6x8, false);  // Inverted
+        } else {
+            hw_->display.SetCursor(0, 0);
+            hw_->display.WriteString("Load Preset", Font_6x8, true);
+            hw_->display.DrawLine(0, 9, 127, 9, true);  // Underline
+        }
         
         if (menu.preset_count == 0) {
             hw_->display.SetCursor(8, 28);
             hw_->display.WriteString("No presets", Font_7x10, true);
         } else {
-            int line = 14;
+            int line = 12;
             for (int i = 0; i < MenuState::VISIBLE_PARAMS && 
                         (menu.preset_scroll_offset + i) < menu.preset_count; i++) {
                 int preset_idx = menu.preset_scroll_offset + i;
-                bool selected = (preset_idx == menu.preset_selected);
+                bool selected = (preset_idx == menu.preset_selected) && !menu.preset_title_selected;
                 
                 // Selection indicator
                 if (selected) {
@@ -605,8 +630,8 @@ private:
             hw_->display.WriteString(buffer, Font_7x10, !editing);
         }
         
-        // Submenu indicator
-        if (param.HasSubmenu()) {
+        // Submenu indicator (only for SUB type, not mappable params)
+        if (param.type == ParamType::SUB) {
             hw_->display.SetCursor(121, y + 1);
             hw_->display.WriteString(">", Font_7x10, true);
         }

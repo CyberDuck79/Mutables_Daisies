@@ -1,9 +1,13 @@
 # My notes TODO
 ## Features
 
+- two modulators (CV OUTs) -> envelope copy / LFO (with config submenu ?)
+
+- add V/Oct -> questions about -> when mapped for CV, remove scaling and min / max deadzone to allow precise CV inputs ??
+
 - add audio ouput functionnality on some engine ?
 
-- two modulators (CV OUTs) -> envelope copy / LFO (with config submenu ?)
+- UI refine: 1px line on top of submenu title bar, boot logo ?
 
 - what is the rate of our CV inputs ? are they compatible with audio rate ?
 
