@@ -147,10 +147,7 @@ public:
             
             hw_->display.SetCursor(76, y + 2);
             hw_->display.WriteString(buffer, Font_7x10, !editing);
-        }
-        
-        // Submenu indicator (only for SUB type, not mappable params)
-        if (param.type == ParamType::SUB) {
+            // Submenu indicator
             hw_->display.SetCursor(121, y + 1);
             hw_->display.WriteString(">", Font_7x10, true);
         }

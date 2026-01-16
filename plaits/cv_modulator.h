@@ -10,7 +10,16 @@ namespace mutables_plaits {
 enum class CVOutMode {
     LPG_ENV = 0,   // Replicate internal LPG envelope
     AD,            // AD envelope
-    LFO            // Low Frequency Oscillator
+    LFO,           // Low Frequency Oscillator
+    GATE           // Gate output modes
+};
+
+// Gate output sub-modes
+enum class GateMode {
+    MIDI_GATE = 0, // Pass through MIDI gate (high when note on)
+    END_ENV,       // Trigger when internal envelope finishes
+    TRIGGER,       // Short trigger pulse on each note
+    CLK_DIV        // Clock divider output
 };
 
 // LFO sync modes
@@ -101,6 +110,10 @@ public:
         slew_amount_ = 0.5f;   // RndSmth slew amount (0=instant, 1=very slow)
         sh_source_ = SHSource::RANDOM;  // S&H source
         
+        // Gate mode params
+        gate_mode_ = GateMode::MIDI_GATE;
+        clock_divider_ = 1;
+        
         // State
         env_value_ = 0.0f;
         env_stage_ = 0;  // 0 = idle, 1 = attack, 2 = release
@@ -111,6 +124,14 @@ public:
         // S&H / Random state
         sh_value_ = 0.0f;
         random_target_ = 0.0f;
+        
+        // Gate mode state
+        midi_gate_ = false;
+        trigger_output_ = 0.0f;
+        prev_lpg_gain_ = 0.0f;
+        end_env_trigger_ = 0.0f;
+        clock_counter_ = 0;
+        clock_div_output_ = false;
         
         // Slew coefficient (will be set based on sample rate)
         slew_coeff_ = 0.1f;
@@ -128,10 +149,29 @@ public:
         slew_coeff_ = 1.0f - expf(-1.0f / (slew_time * block_rate_));
     }
     
-    // Trigger for AD envelope
+    // Trigger for AD envelope and Gate modes
     void Trigger() {
         if (mode_ == CVOutMode::AD) {
             env_stage_ = 1;  // Start attack
+        }
+        if (mode_ == CVOutMode::GATE && gate_mode_ == GateMode::TRIGGER) {
+            trigger_output_ = 1.0f;  // Start trigger pulse
+        }
+    }
+    
+    // Set MIDI gate state (for MIDI_GATE mode)
+    void SetMIDIGate(bool gate) {
+        midi_gate_ = gate;
+    }
+    
+    // Called on MIDI clock for clock divider
+    void OnMIDIClock() {
+        if (mode_ == CVOutMode::GATE && gate_mode_ == GateMode::CLK_DIV) {
+            clock_counter_++;
+            if (clock_counter_ >= clock_divider_) {
+                clock_counter_ = 0;
+                clock_div_output_ = !clock_div_output_;  // Toggle output
+            }
         }
     }
     
@@ -152,11 +192,19 @@ public:
             case CVOutMode::LFO:
                 raw_output = ProcessLFO(midi_clock_hz, gate2_clock_hz, cv_values);
                 break;
+                
+            case CVOutMode::GATE:
+                raw_output = ProcessGate(lpg_gain);
+                break;
         }
         
-        // Apply slew to avoid stepping
-        slew_output_ += slew_coeff_ * (raw_output - slew_output_);
-        output_ = slew_output_;
+        // Apply slew to avoid stepping (skip for GATE mode - we want sharp edges)
+        if (mode_ == CVOutMode::GATE) {
+            output_ = raw_output;
+        } else {
+            slew_output_ += slew_coeff_ * (raw_output - slew_output_);
+            output_ = slew_output_;
+        }
         
         return output_ * amp_;
     }
@@ -172,12 +220,58 @@ public:
     void SetPhaseOffset(float phase) { phase_offset_ = phase; }
     void SetSlewAmount(float slew) { slew_amount_ = slew; }
     void SetSHSource(SHSource source) { sh_source_ = source; }
+    void SetGateMode(GateMode mode) { gate_mode_ = mode; }
+    void SetClockDivider(int divider) { clock_divider_ = divider > 0 ? divider : 1; }
     
     // Getters
     CVOutMode GetMode() const { return mode_; }
     float GetOutput() const { return output_ * amp_; }
     
 private:
+    // Gate mode processing
+    float ProcessGate(float lpg_gain) {
+        float output = 0.0f;
+        
+        switch (gate_mode_) {
+            case GateMode::MIDI_GATE:
+                // Simple MIDI gate pass-through
+                output = midi_gate_ ? 1.0f : 0.0f;
+                break;
+                
+            case GateMode::END_ENV:
+                // Detect when LPG envelope falls below threshold
+                // Output a short trigger when it ends
+                if (prev_lpg_gain_ > 0.01f && lpg_gain <= 0.01f) {
+                    end_env_trigger_ = 1.0f;  // Start trigger
+                }
+                // Decay trigger quickly (~10ms)
+                if (end_env_trigger_ > 0.0f) {
+                    end_env_trigger_ -= 1.0f / (0.01f * block_rate_);
+                    if (end_env_trigger_ < 0.0f) end_env_trigger_ = 0.0f;
+                }
+                prev_lpg_gain_ = lpg_gain;
+                output = end_env_trigger_ > 0.5f ? 1.0f : 0.0f;
+                break;
+                
+            case GateMode::TRIGGER:
+                // Short trigger pulse on note (set by Trigger() call)
+                // Decay trigger quickly (~5ms)
+                if (trigger_output_ > 0.0f) {
+                    trigger_output_ -= 1.0f / (0.005f * block_rate_);
+                    if (trigger_output_ < 0.0f) trigger_output_ = 0.0f;
+                }
+                output = trigger_output_ > 0.5f ? 1.0f : 0.0f;
+                break;
+                
+            case GateMode::CLK_DIV:
+                // Clock divider output (toggled by OnMIDIClock)
+                output = clock_div_output_ ? 1.0f : 0.0f;
+                break;
+        }
+        
+        return output;
+    }
+    
     // AD envelope processing
     float ProcessAD() {
         if (env_stage_ == 0) {
@@ -330,6 +424,8 @@ private:
     float phase_offset_;
     float slew_amount_;
     SHSource sh_source_;
+    GateMode gate_mode_;
+    int clock_divider_;
     
     // State
     float env_value_;
@@ -340,6 +436,14 @@ private:
     float sh_value_;
     float random_target_;
     float slew_coeff_;
+    
+    // Gate mode state
+    bool midi_gate_;
+    float trigger_output_;
+    float prev_lpg_gain_;
+    float end_env_trigger_;
+    int clock_counter_;
+    bool clock_div_output_;
     
     float sample_rate_;
     float block_rate_;

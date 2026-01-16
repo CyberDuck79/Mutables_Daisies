@@ -65,26 +65,28 @@ private:
     uint8_t buffer_[kBufferSize];
     
     // Parameters
-    static constexpr int kNumParams = 17;  // Bank, Engine, Freq.Rng, Frequency, Harmonics, Timbre, Morph, Level, LPG Color, LPG Decay, Volume, MIDI Ch, User Data (SUB), CV Out 1 (SUB), CV Out 2 (SUB), Save, Load
+    static constexpr int kNumParams = 19;  // Bank, Engine, Frequency, Harmonics, Timbre, Morph, Level, V/Oct, LPG Color, LPG Decay, Octave, Volume, MIDI Ch, CV Out 1 (SUB), CV Out 2 (SUB), Gate Out (SUB), User Data (SUB), Save, Load
     static constexpr int kNumUserDataParams = 5;  // 3 FM banks + wavetable + wave terrain
-    static constexpr int kNumCVOutParams = 10;  // Mode, Attack, Release, Shape, Slew (RndSmth), SH_Src (S&H), Sync, Rate, Amp, Phase
+    static constexpr int kNumCVOutParams = 12;  // Mode, Attack, Release, Shape, Slew (RndSmth), SH_Src (S&H), Sync, Rate, Amp, Phase, Gate Mode, Clk Div
+    static constexpr int kNumGateOutParams = 2;  // Mode, Clk Div
     std::array<mutables_ui::Parameter, kNumParams> params_;
     std::array<mutables_ui::Parameter, kNumUserDataParams> user_data_params_;  // Children of User Data submenu
     std::array<mutables_ui::Parameter, kNumCVOutParams> cv_out1_params_;  // Children of CV Out 1 submenu
     std::array<mutables_ui::Parameter, kNumCVOutParams> cv_out2_params_;  // Children of CV Out 2 submenu
+    std::array<mutables_ui::Parameter, kNumGateOutParams> gate_out_params_;  // Children of Gate Out submenu
     
     // Bank and engine system
     static const char* bank_names_[];
     static const char* synth_engine_names_[];
     static const char* drum_engine_names_[];
     static const char* new_engine_names_[];
-    static const char* freq_range_names_[];
+    static const char* octave_names_[];
     static const char* midi_channel_names_[];
     static constexpr int kNumBanks = 3;
     static constexpr int kNumSynthEngines = 8;
     static constexpr int kNumDrumEngines = 8;
     static constexpr int kNumNewEngines = 8;
-    static constexpr int kNumFreqRanges = 10;  // C0-C8 + full range
+    static constexpr int kNumOctaves = 9;  // C0-C8
     static constexpr int kNumMidiChannels = 17;  // Omni + 1-16
     
     int current_bank_;
@@ -108,6 +110,12 @@ private:
     float gate2_clock_hz_;
     uint32_t sample_counter_;
     
+    // Gate output state
+    float prev_lpg_gain_;           // For end-of-envelope detection
+    uint32_t gate_out_trigger_counter_;  // For trigger pulse
+    int clock_div_counter_;         // For clock divider
+    bool gate_out_state_;           // Current gate output state
+    
     void UpdatePatchFromParams();
     void SetupParameters();
     void UpdateEngineListForBank(int bank);
@@ -126,7 +134,10 @@ public:
     void UpdateSampleCounter(size_t samples);
     
     // Get MIDI channel setting: 0 = Omni (all), 1-16 = specific channel
-    int GetMidiChannel() const { return params_[11].GetIndex(); }
+    int GetMidiChannel() const { return params_[12].GetIndex(); }
+    
+    // Gate output
+    bool GetGateOutput() const;
 };
 
 } // namespace mutables_plaits

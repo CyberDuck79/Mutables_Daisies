@@ -11,18 +11,17 @@ const char* PlaitsPort::bank_names_[] = {
     "New"
 };
 
-// Frequency range names (C0-C8 individual octaves, plus full range)
-const char* PlaitsPort::freq_range_names_[] = {
-    "C0",      // 0: Fixed to C0 (note 12) ±7 semitones
-    "C1",      // 1: Fixed to C1 (note 24) ±7 semitones
-    "C2",      // 2: Fixed to C2 (note 36) ±7 semitones
-    "C3",      // 3: Fixed to C3 (note 48) ±7 semitones
-    "C4",      // 4: Fixed to C4 (note 60) ±7 semitones
-    "C5",      // 5: Fixed to C5 (note 72) ±7 semitones
-    "C6",      // 6: Fixed to C6 (note 84) ±7 semitones
-    "C7",      // 7: Fixed to C7 (note 96) ±7 semitones
-    "C8",      // 8: Fixed to C8 (note 108) ±7 semitones
-    "C0-C8"    // 9: Full 8-octave range
+// Octave names (C0-C8 base octave, Freq knob adds ±7 semitones fine tuning)
+const char* PlaitsPort::octave_names_[] = {
+    "C0",      // 0: Base C0 (note 12)
+    "C1",      // 1: Base C1 (note 24)
+    "C2",      // 2: Base C2 (note 36)
+    "C3",      // 3: Base C3 (note 48)
+    "C4",      // 4: Base C4 (note 60)
+    "C5",      // 5: Base C5 (note 72)
+    "C6",      // 6: Base C6 (note 84)
+    "C7",      // 7: Base C7 (note 96)
+    "C8"       // 8: Base C8 (note 108)
 };
 
 // MIDI channel names (Omni = all channels, then 1-16)
@@ -72,9 +71,60 @@ const char* PlaitsPort::new_engine_names_[] = {
 static const char* cv_out_mode_names[] = {
     "LPG",       // Follows internal LPG envelope
     "AD",        // AD envelope triggered on gate
-    "LFO"        // Low frequency oscillator
+    "LFO",       // Low frequency oscillator
+    "Gate"       // Gate output modes
 };
-static constexpr int kNumCVOutModes = 3;
+static constexpr int kNumCVOutModes = 4;
+
+// Gate mode names
+static const char* gate_mode_names[] = {
+    "MIDIGt",    // MIDI gate pass-through
+    "EndEnv",    // Trigger on envelope end
+    "Trig",      // Short trigger on note
+    "ClkDiv"     // Clock divider
+};
+static constexpr int kNumGateModes = 4;
+
+// Clock divider ratio names
+static const char* clk_div_names[] = {
+    "/1", "/2", "/3", "/4", "/6", "/8", "/12", "/16", "/24", "/32"
+};
+static constexpr int kNumClkDivs = 10;
+// Actual divider values (MIDI clock = 24 ppq)
+static const int clk_div_values[] = {
+    24, 48, 72, 96, 144, 192, 288, 384, 576, 768  // 1, 2, 3, 4, 6, 8, 12, 16, 24, 32 quarter notes
+};
+
+// Gate output mode names (for physical Gate Out jack)
+static const char* gate_out_mode_names[] = {
+    "MIDIGt",    // MIDI gate pass-through
+    "EndEnv",    // Trigger on envelope end
+    "Trig",      // Short trigger on note
+    "ClkDiv"     // Clock divider
+};
+static constexpr int kNumGateOutModes = 4;
+
+// Gate Out parameter indices
+enum GateOutParamIndex {
+    GATEOUT_MODE = 0,
+    GATEOUT_CLK_DIV = 1
+};
+
+// Visibility callback for Gate Out params
+static bool GateOutVisibilityCallback(const mutables_ui::Parameter* siblings, uint8_t sibling_count, uint8_t param_index) {
+    if (sibling_count < 1) return true;
+    
+    int mode = siblings[GATEOUT_MODE].GetIndex();
+    
+    switch (param_index) {
+        case GATEOUT_MODE:
+            return true;  // Always visible
+        case GATEOUT_CLK_DIV:
+            return (mode == 3);  // Only for ClkDiv mode
+        default:
+            return true;
+    }
+}
 
 // LFO shape names
 static const char* lfo_shape_names[] = {
@@ -126,18 +176,22 @@ enum CVOutParamIndex {
     CVOUT_SYNC = 6,
     CVOUT_RATE = 7,
     CVOUT_AMP = 8,
-    CVOUT_PHASE = 9
+    CVOUT_PHASE = 9,
+    CVOUT_GATE_MODE = 10, // Gate sub-mode (MIDI Gate, End Env, Trigger, Clk Div)
+    CVOUT_CLK_DIV = 11    // Clock divider ratio
 };
 
 // Visibility callback for CV Out params
 // Mode 0 = LPG Env: only show Amp
 // Mode 1 = AD: show Attack, Release, Amp
 // Mode 2 = LFO: show Shape, Slew/SH_Src (based on shape), Sync, Rate, Amp, Phase
+// Mode 3 = Gate: show Gate Mode, and Clk Div if ClkDiv mode
 static bool CVOutVisibilityCallback(const mutables_ui::Parameter* siblings, uint8_t sibling_count, uint8_t param_index) {
     if (sibling_count < 1) return true;
     
     int mode = siblings[CVOUT_MODE].GetIndex();
     int shape = (sibling_count > CVOUT_SHAPE) ? siblings[CVOUT_SHAPE].GetIndex() : 0;
+    int gate_mode = (sibling_count > CVOUT_GATE_MODE) ? siblings[CVOUT_GATE_MODE].GetIndex() : 0;
     
     switch (param_index) {
         case CVOUT_MODE:
@@ -158,7 +212,12 @@ static bool CVOutVisibilityCallback(const mutables_ui::Parameter* siblings, uint
         case CVOUT_PHASE:
             return (mode == 2);  // Only for LFO mode
         case CVOUT_AMP:
-            return true;  // Always visible
+            return (mode != 3);  // Hidden for Gate mode (always full amplitude)
+        case CVOUT_GATE_MODE:
+            return (mode == 3);  // Only for Gate mode
+        case CVOUT_CLK_DIV:
+            // Only for Gate mode AND ClkDiv sub-mode (index 3)
+            return (mode == 3) && (gate_mode == 3);
         default:
             return true;
     }
@@ -323,6 +382,12 @@ void PlaitsPort::Init(float sample_rate) {
     cv_modulator_2_.SetSampleRate(sample_rate, kBlockSize);
     midi_clock_tracker_.Init();
     
+    // Initialize gate output state
+    prev_lpg_gain_ = 0.0f;
+    gate_out_trigger_counter_ = 0;
+    clock_div_counter_ = 0;
+    gate_out_state_ = false;
+    
     // Setup parameters
     SetupParameters();
     
@@ -357,34 +422,30 @@ void PlaitsPort::SetupParameters() {
     params_[6] = mutables_ui::Parameter::CV("Level");
     params_[6].value = 0.8f;  // Default level
     
+    // V/Oct - CV input for pitch control (0-5V = ±30 semitones, 2.5V = 0)
+    // Uses raw ADC for maximum precision
+    params_[7] = mutables_ui::Parameter::CV("V/Oct");
+    params_[7].value = 0.5f;  // Default to center (2.5V = 0 semitones)
+    
     // LPG Color - NO native attenuverter, we handle it
-    params_[7] = mutables_ui::Parameter::Knob("LPG Color", 0.0f, 1.0f, 0.5f);
+    params_[8] = mutables_ui::Parameter::Knob("LPG Color", 0.0f, 1.0f, 0.5f);
     
     // LPG Decay - NO native attenuverter, we handle it
-    params_[8] = mutables_ui::Parameter::Knob("LPG Decay", 0.0f, 1.0f, 0.5f);
+    params_[9] = mutables_ui::Parameter::Knob("LPG Decay", 0.0f, 1.0f, 0.5f);
 
-    // Frequency Range - selects octave range for the Frequency knob
-    // C0-C8: individual octaves with ±7 semitone fine tuning
-    // C0-C8 (full): full 8-octave range
-    params_[9] = mutables_ui::Parameter::Enum("Freq. Rng", freq_range_names_, kNumFreqRanges);
-    params_[9].SetIndex(4);  // Default to C4 (middle C)
+    // Octave - selects base octave, Freq knob adds ±7 semitone fine tuning
+    // MIDI and V/Oct CV are added on top of this
+    params_[10] = mutables_ui::Parameter::Enum("Octave", octave_names_, kNumOctaves);
+    params_[10].SetIndex(4);  // Default to C4 (middle C)
     
     // Volume - scales output level (1.0 = full, useful for eurorack compatibility)
     // Can add velocity mod for standard velocity->volume behavior
-    params_[10] = mutables_ui::Parameter::Knob("Volume", 0.0f, 1.0f, 1.0f);  // Default to full
+    params_[11] = mutables_ui::Parameter::Knob("Volume", 0.0f, 1.0f, 1.0f);  // Default to full
     
     // MIDI Channel - Omni (all) or specific channel 1-16
-    params_[11] = mutables_ui::Parameter::Enum("MIDI Ch", midi_channel_names_, kNumMidiChannels);
-    params_[11].SetIndex(0);  // Default to Omni
+    params_[12] = mutables_ui::Parameter::Enum("MIDI Ch", midi_channel_names_, kNumMidiChannels);
+    params_[12].SetIndex(0);  // Default to Omni
     
-    // User Data submenu - allows selecting custom user data files from SD card
-    // Target indices match UserDataManager::Target enum
-    user_data_params_[0] = mutables_ui::Parameter::UserData("6-Op Bk 1", 0);  // TARGET_SIX_OP_1
-    user_data_params_[1] = mutables_ui::Parameter::UserData("6-Op Bk 2", 1);  // TARGET_SIX_OP_2
-    user_data_params_[2] = mutables_ui::Parameter::UserData("6-Op Bk 3", 2);  // TARGET_SIX_OP_3
-    user_data_params_[3] = mutables_ui::Parameter::UserData("WavTerrain", 3); // TARGET_WAVE_TERRAIN
-    user_data_params_[4] = mutables_ui::Parameter::UserData("Wavetable", 4);  // TARGET_WAVETABLE
-    params_[12] = mutables_ui::Parameter::Sub("User Data", user_data_params_.data(), kNumUserDataParams);
     
     // CV Output 1 submenu
     SetupCVOutParams(cv_out1_params_, "CV1");
@@ -393,14 +454,31 @@ void PlaitsPort::SetupParameters() {
     // CV Output 2 submenu
     SetupCVOutParams(cv_out2_params_, "CV2");
     params_[14] = mutables_ui::Parameter::Sub("CV Out 2", cv_out2_params_.data(), kNumCVOutParams);
+
+    // Gate Output submenu
+    gate_out_params_[0] = mutables_ui::Parameter::Enum("Mode", gate_out_mode_names, kNumGateOutModes);
+    gate_out_params_[1] = mutables_ui::Parameter::Enum("ClkDiv", clk_div_names, kNumClkDivs);
+    for (int i = 0; i < kNumGateOutParams; i++) {
+        gate_out_params_[i].visibility_callback = GateOutVisibilityCallback;
+    }
+    params_[15] = mutables_ui::Parameter::Sub("Gate Out", gate_out_params_.data(), kNumGateOutParams);
+
+    // User Data submenu - allows selecting custom user data files from SD card
+    // Target indices match UserDataManager::Target enum
+    user_data_params_[0] = mutables_ui::Parameter::UserData("6-Op Bk 1", 0);  // TARGET_SIX_OP_1
+    user_data_params_[1] = mutables_ui::Parameter::UserData("6-Op Bk 2", 1);  // TARGET_SIX_OP_2
+    user_data_params_[2] = mutables_ui::Parameter::UserData("6-Op Bk 3", 2);  // TARGET_SIX_OP_3
+    user_data_params_[3] = mutables_ui::Parameter::UserData("WavTerrain", 3); // TARGET_WAVE_TERRAIN
+    user_data_params_[4] = mutables_ui::Parameter::UserData("Wavetable", 4);  // TARGET_WAVETABLE
+    params_[16] = mutables_ui::Parameter::Sub("User Data", user_data_params_.data(), kNumUserDataParams);
     
     // Save/Load presets
-    params_[15] = mutables_ui::Parameter::Save();
-    params_[16] = mutables_ui::Parameter::Load();
+    params_[17] = mutables_ui::Parameter::Save();
+    params_[18] = mutables_ui::Parameter::Load();
 }
 
 void PlaitsPort::SetupCVOutParams(std::array<mutables_ui::Parameter, kNumCVOutParams>& params, const char* name_prefix) {
-    // Mode: LPG Env, AD, LFO
+    // Mode: LPG Env, AD, LFO, Gate
     params[0] = mutables_ui::Parameter::Enum("Mode", cv_out_mode_names, kNumCVOutModes);
     
     // AD envelope params (used when mode = AD)
@@ -421,6 +499,10 @@ void PlaitsPort::SetupCVOutParams(std::array<mutables_ui::Parameter, kNumCVOutPa
     // Common params
     params[8] = mutables_ui::Parameter::Knob("Amp", 0.0f, 1.0f, 1.0f);        // Output amplitude scaling
     params[9] = mutables_ui::Parameter::Knob("Phase", 0.0f, 1.0f, 0.0f);      // LFO initial phase offset (0-360°)
+    
+    // Gate mode params (used when mode = Gate)
+    params[10] = mutables_ui::Parameter::Enum("Gt Mode", gate_mode_names, kNumGateModes);
+    params[11] = mutables_ui::Parameter::Enum("ClkDiv", clk_div_names, kNumClkDivs);
     
     // Assign visibility and format callbacks to all params
     for (int i = 0; i < kNumCVOutParams; i++) {
@@ -484,46 +566,48 @@ void PlaitsPort::UpdatePatchFromParams() {
     patch_->engine = GetActualEngineIndex(bank, engine_in_bank);
     
     // ==========================================================================
-    // FREQUENCY CALCULATION (matching original Plaits behavior)
+    // FREQUENCY CALCULATION
     // ==========================================================================
-    // Original Plaits:
-    // - FREQUENCY knob sets base note within the selected octave range
-    // - V/Oct CV is ADDED to this base note by the voice engine
-    // 
-    // Our implementation:
-    // - Freq. Rng selects the octave range (C0-C8 or full)
-    // - Frequency knob sets fine tuning (±7 semitones in Cn mode)
-    // - MIDI note acts as V/Oct: added to base note as offset from C4 (note 60)
+    // - Octave param selects base octave (C0-C8)
+    // - Frequency knob adds ±7 semitones fine tuning
+    // - MIDI note is added as offset from C4 (note 60)
+    // - V/Oct CV input adds ±30 semitones (2.5V = 0)
     // ==========================================================================
     
-    int freq_range = params_[2].GetIndex();  // 0-8 = C0-C8, 9 = full range
-    float frequency_knob = params_[3].value;
+    int octave = params_[10].GetIndex();  // 0-8 = C0-C8
+    float frequency_knob = params_[2].value;
     
-    float base_note;
-    if (freq_range == 9) {
-        // Full C0-C8 range: knob sweeps entire range (notes 12-108)
-        base_note = 60.0f + (frequency_knob - 0.5f) * 96.0f;  // C0=12 to C8=108, centered on C4
-    } else {
-        // Fixed octave with ±7 semitone fine tuning
-        // C0=note 12, C1=24, ..., C8=108
-        float octave_note = static_cast<float>((freq_range + 1) * 12);  // +1 because C0=12
-        float fine_tune = (frequency_knob - 0.5f) * 14.0f;  // ±7 semitones
-        base_note = octave_note + fine_tune;
-    }
+    // Base note from octave selection: C0=note 12, C1=24, ..., C8=108
+    float octave_note = static_cast<float>((octave + 1) * 12);  // +1 because C0=12
+    
+    // Fine tuning from Frequency knob: ±7 semitones
+    float fine_tune = (frequency_knob - 0.5f) * 14.0f;
+    
+    float base_note = octave_note + fine_tune;
     
     // MIDI note acts as V/Oct offset from C4 (middle C = note 60)
     // When MIDI note 60 is received, it adds 0 to base_note
     // MIDI note 72 adds +12 (one octave up), MIDI note 48 adds -12 (one octave down)
-    float voct_offset = midi_note_ - 60.0f;
+    float midi_offset = midi_note_ - 60.0f;
     
-    patch_->note = base_note + voct_offset;
+    // V/Oct CV input: 0-5V maps to ±30 semitones (2.5V = 0)
+    // params_[7].value contains the raw CV (0.0-1.0)
+    // Only apply V/Oct if the parameter is mapped to a CV input
+    float voct_cv_offset = 0.0f;
+    if (params_[7].mapping.IsCVSource()) {
+        // Use raw CV value for precision (0.0-1.0 corresponds to 0-5V)
+        float voct_raw = params_[7].value;
+        voct_cv_offset = (voct_raw - 0.5f) * 60.0f;  // ±30 semitones
+    }
+    
+    patch_->note = base_note + midi_offset + voct_cv_offset;
     
     // For parameters with CV mapping: use offset as base value when plugged
     // This lets Plaits add the CV modulation on top
-    auto& harmonics = params_[4];
-    auto& timbre = params_[5];
-    auto& morph = params_[6];
-    auto& frequency = params_[3];
+    auto& harmonics = params_[3];
+    auto& timbre = params_[4];
+    auto& morph = params_[5];
+    auto& frequency = params_[2];
     
     // Apply velocity modulation: vel_mod = velocity * velocity_amount
     // This is applied when USING values, not when storing them (to avoid feedback)
@@ -590,7 +674,7 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         // Set modulations - keep trigger high while gate is active
         // Plaits does its own edge detection internally
         modulations_->trigger = active_gate ? 1.0f : 0.0f;
-        modulations_->level = params_[7].value;
+        modulations_->level = params_[6].value;  // Level parameter
         
         // CV modulation values (set by main.cpp via SetCVModulations)
         // For CC: the CC value is used directly as modulation (scaled 0-1)
@@ -601,15 +685,15 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         // Patched status - true only when CV is mapped+plugged
         // This tells Plaits whether to use external modulation or internal envelope
         // CC mapping just replaces base value, doesn't count as patched
-        auto& frequency = params_[3];
-        auto& timbre = params_[5];
-        auto& morph = params_[6];
+        auto& frequency = params_[2];
+        auto& timbre = params_[4];
+        auto& morph = params_[5];
         
         modulations_->frequency_patched = frequency.mapping.IsCVSource() && frequency.mapping.plugged;
         modulations_->timbre_patched = timbre.mapping.IsCVSource() && timbre.mapping.plugged;
         modulations_->morph_patched = morph.mapping.IsCVSource() && morph.mapping.plugged;
         modulations_->trigger_patched = true;  // Always patched via MIDI/Gate
-        modulations_->level_patched = params_[7].mapping.IsCVSource();
+        modulations_->level_patched = params_[6].mapping.IsCVSource();  // Level parameter
         
         // Render audio
         voice_->Render(*patch_, *modulations_, frames, block_size);
@@ -620,9 +704,52 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         cv_modulator_1_.Process(lpg_gain, midi_clock_hz_, gate2_clock_hz_, cv_inputs_);
         cv_modulator_2_.Process(lpg_gain, midi_clock_hz_, gate2_clock_hz_, cv_inputs_);
         
+        // Gate Output processing
+        int gate_out_mode = gate_out_params_[GATEOUT_MODE].GetIndex();
+        
+        // EndEnv mode: detect when envelope ends (lpg_gain drops below threshold)
+        if (gate_out_mode == 1) {
+            constexpr float kEnvThreshold = 0.01f;
+            if (prev_lpg_gain_ > kEnvThreshold && lpg_gain <= kEnvThreshold) {
+                // Envelope just ended - set trigger
+                gate_out_state_ = true;
+                gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);  // 10ms trigger
+            }
+            prev_lpg_gain_ = lpg_gain;
+        }
+        
+        // Trig mode: countdown the trigger pulse
+        if (gate_out_mode == 2 && gate_out_trigger_counter_ > 0) {
+            if (gate_out_trigger_counter_ > block_size) {
+                gate_out_trigger_counter_ -= block_size;
+            } else {
+                gate_out_trigger_counter_ = 0;
+            }
+        }
+        
+        // EndEnv mode: also countdown the trigger pulse
+        if (gate_out_mode == 1 && gate_out_state_ && gate_out_trigger_counter_ > 0) {
+            if (gate_out_trigger_counter_ > block_size) {
+                gate_out_trigger_counter_ -= block_size;
+            } else {
+                gate_out_trigger_counter_ = 0;
+                gate_out_state_ = false;
+            }
+        }
+        
+        // ClkDiv mode: countdown the trigger pulse
+        if (gate_out_mode == 3 && gate_out_state_ && gate_out_trigger_counter_ > 0) {
+            if (gate_out_trigger_counter_ > block_size) {
+                gate_out_trigger_counter_ -= block_size;
+            } else {
+                gate_out_trigger_counter_ = 0;
+                gate_out_state_ = false;
+            }
+        }
+        
         // Get volume with velocity modulation
-        float vol_vel = midi_velocity_ * params_[10].mapping.velocity_amount;
-        float volume = std::clamp(params_[10].value + vol_vel, 0.0f, 1.0f);
+        float vol_vel = midi_velocity_ * params_[11].mapping.velocity_amount;  // Volume parameter
+        float volume = std::clamp(params_[11].value + vol_vel, 0.0f, 1.0f);
         
         // Convert from short to float, apply volume, and copy to outputs
         // OUT -> channels 1 & 3, AUX -> channels 2 & 4
@@ -687,6 +814,8 @@ void PlaitsPort::UpdateCVModulatorsFromParams() {
     cv_modulator_1_.SetRate(cv_out1_params_[CVOUT_RATE].value);
     cv_modulator_1_.SetAmp(cv_out1_params_[CVOUT_AMP].value);
     cv_modulator_1_.SetPhaseOffset(cv_out1_params_[CVOUT_PHASE].value);
+    cv_modulator_1_.SetGateMode(static_cast<GateMode>(cv_out1_params_[CVOUT_GATE_MODE].GetIndex()));
+    cv_modulator_1_.SetClockDivider(clk_div_values[cv_out1_params_[CVOUT_CLK_DIV].GetIndex()]);
     
     // Update CV modulator 2 from its params
     cv_modulator_2_.SetMode(static_cast<CVOutMode>(cv_out2_params_[CVOUT_MODE].GetIndex()));
@@ -699,6 +828,8 @@ void PlaitsPort::UpdateCVModulatorsFromParams() {
     cv_modulator_2_.SetRate(cv_out2_params_[CVOUT_RATE].value);
     cv_modulator_2_.SetAmp(cv_out2_params_[CVOUT_AMP].value);
     cv_modulator_2_.SetPhaseOffset(cv_out2_params_[CVOUT_PHASE].value);
+    cv_modulator_2_.SetGateMode(static_cast<GateMode>(cv_out2_params_[CVOUT_GATE_MODE].GetIndex()));
+    cv_modulator_2_.SetClockDivider(clk_div_values[cv_out2_params_[CVOUT_CLK_DIV].GetIndex()]);
 }
 
 void PlaitsPort::OnMIDIClock() {
@@ -709,6 +840,20 @@ void PlaitsPort::OnMIDIClock() {
     } else {
         midi_clock_hz_ = 0.0f;
     }
+    // Also trigger clock dividers in CV modulators
+    cv_modulator_1_.OnMIDIClock();
+    cv_modulator_2_.OnMIDIClock();
+    
+    // Gate Output clock divider mode
+    if (gate_out_params_[GATEOUT_MODE].GetIndex() == 3) {  // ClkDiv mode
+        clock_div_counter_++;
+        int divider = clk_div_values[gate_out_params_[GATEOUT_CLK_DIV].GetIndex()];
+        if (clock_div_counter_ >= divider) {
+            clock_div_counter_ = 0;
+            gate_out_state_ = true;
+            gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);  // 10ms trigger
+        }
+    }
 }
 
 void PlaitsPort::UpdateSampleCounter(size_t samples) {
@@ -716,15 +861,61 @@ void PlaitsPort::UpdateSampleCounter(size_t samples) {
 }
 
 void PlaitsPort::NoteOn(uint8_t note, uint8_t velocity) {
-    midi_note_ = static_cast<float>(note);
+    // V/Oct and MIDI pitch are mutually exclusive
+    // If V/Oct is mapped to a CV input, ignore MIDI note pitch
+    // (MIDI clock and other messages still work, and all messages pass to MIDI out)
+    if (!params_[7].mapping.IsCVSource()) {
+        midi_note_ = static_cast<float>(note);
+    }
     midi_velocity_ = static_cast<float>(velocity) / 127.0f;
     midi_gate_ = true;
+    
+    // Update CV modulator MIDI gate state
+    cv_modulator_1_.SetMIDIGate(true);
+    cv_modulator_2_.SetMIDIGate(true);
+    
+    // Gate Output Trig mode: start trigger pulse on note on
+    if (gate_out_params_[GATEOUT_MODE].GetIndex() == 2) {
+        gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);  // 10ms trigger
+    }
 }
 
 void PlaitsPort::NoteOff(uint8_t note, uint8_t velocity) {
     // Only release if it's the same note (monophonic)
-    if (static_cast<uint8_t>(midi_note_) == note) {
+    // When V/Oct is mapped, midi_note_ stays at 60 (C4), so we still track gate
+    if (!params_[7].mapping.IsCVSource()) {
+        if (static_cast<uint8_t>(midi_note_) == note) {
+            midi_gate_ = false;
+            cv_modulator_1_.SetMIDIGate(false);
+            cv_modulator_2_.SetMIDIGate(false);
+        }
+    } else {
+        // V/Oct mode: always release gate on any note off
         midi_gate_ = false;
+        cv_modulator_1_.SetMIDIGate(false);
+        cv_modulator_2_.SetMIDIGate(false);
+    }
+}
+
+bool PlaitsPort::GetGateOutput() const {
+    int mode = gate_out_params_[GATEOUT_MODE].GetIndex();
+    
+    switch(mode) {
+        case 0:  // MIDIGt - MIDI gate pass-through
+            return midi_gate_;
+            
+        case 1:  // EndEnv - Trigger at end of envelope
+            // This is set by Process() when envelope ends
+            return gate_out_state_;
+            
+        case 2:  // Trig - Short trigger on note
+            return gate_out_trigger_counter_ > 0;
+            
+        case 3:  // ClkDiv - Clock divider
+            return gate_out_state_;
+            
+        default:
+            return midi_gate_;
     }
 }
 

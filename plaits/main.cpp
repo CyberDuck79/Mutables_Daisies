@@ -115,11 +115,13 @@ int CalculateEnumFromCV(const mutables_ui::Parameter& param, const CVInputBank& 
 }
 
 void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size) {
-    // Update CV inputs
-    float cv1 = hw.GetKnobValue(DaisyPatch::CTRL_1);
-    float cv2 = hw.GetKnobValue(DaisyPatch::CTRL_2);
-    float cv3 = hw.GetKnobValue(DaisyPatch::CTRL_3);
-    float cv4 = hw.GetKnobValue(DaisyPatch::CTRL_4);
+    // Update CV inputs with raw ADC values (no pot scaling or processing)
+    // This preserves precision for V/Oct and accurate offset capture
+    // Invert values since ADC reads are inverted on Daisy Patch (0V = 1.0, 5V = 0.0)
+    float cv1 = 1.0f - hw.controls[DaisyPatch::CTRL_1].GetRawFloat();
+    float cv2 = 1.0f - hw.controls[DaisyPatch::CTRL_2].GetRawFloat();
+    float cv3 = 1.0f - hw.controls[DaisyPatch::CTRL_3].GetRawFloat();
+    float cv4 = 1.0f - hw.controls[DaisyPatch::CTRL_4].GetRawFloat();
     
     cv_inputs.UpdateRawValues(
         std::clamp(cv1, 0.0f, 1.0f),
@@ -298,6 +300,9 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     uint16_t dac_2 = static_cast<uint16_t>(std::clamp(cv_out_2, 0.0f, 1.0f) * 4095.0f);
     hw.seed.dac.WriteValue(DacHandle::Channel::ONE, dac_1);
     hw.seed.dac.WriteValue(DacHandle::Channel::TWO, dac_2);
+    
+    // Write Gate Output
+    hw.gate_output.Write(plaits_module.GetGateOutput());
 }
 
 // Cycle through mapping sources based on parameter type
