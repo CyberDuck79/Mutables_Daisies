@@ -66,17 +66,20 @@ private:
     uint8_t buffer_[kBufferSize];
     
     // Parameters
-    static constexpr int kNumParams = 20;  // Bank, Engine, Frequency, Harmonics, Timbre, Morph, Level, V/Oct, LPG Color, LPG Decay, Octave, Volume, MIDI Ch, CV Out 1 (SUB), CV Out 2 (SUB), Gate Out (SUB), Audio In (SUB), User Data (SUB), Save, Load
+    static constexpr int kNumParams = 22;  // Bank, Engine, Frequency, Harmonics, Timbre, Morph, Level, V/Oct, LPG Color, LPG Decay, Octave, Volume, MIDI Ch, CV Out 1 (SUB), CV Out 2 (SUB), Gate Out (SUB), Audio In 2 (SUB), Audio In 3 (SUB), Audio In 4 (SUB), User Data (SUB), Save, Load
     static constexpr int kNumUserDataParams = 5;  // 3 FM banks + wavetable + wave terrain
-    static constexpr int kNumCVOutParams = 12;  // Mode, Attack, Release, Shape, Slew (RndSmth), SH_Src (S&H), Sync, Rate, Amp, Phase, Gate Mode, Clk Div
+    static constexpr int kNumCVOutParams = 12;  // Mode, Attack, Release, Shape, Slew (RndSmth), SH_Src (S&H), Sync, Rate, Amp, Phase, Scale3 (Foll.3), Scale4 (Foll.4)
     static constexpr int kNumGateOutParams = 2;  // Mode, Clk Div
-    static constexpr int kNumAudioInParams = 7;  // Mode, Timbre±, Morph±, Attack, Release, Threshold, Holdoff
+    static constexpr int kNumAudioInParams = 8;  // Mode, Gain, Timbre±, Morph±, Attack, Release, Threshold, Holdoff
+    static constexpr int kNumAudioIn2Params = 3;  // Mode, Gain, Amount (audio-rate modulation)
     std::array<mutables_ui::Parameter, kNumParams> params_;
     std::array<mutables_ui::Parameter, kNumUserDataParams> user_data_params_;  // Children of User Data submenu
     std::array<mutables_ui::Parameter, kNumCVOutParams> cv_out1_params_;  // Children of CV Out 1 submenu
     std::array<mutables_ui::Parameter, kNumCVOutParams> cv_out2_params_;  // Children of CV Out 2 submenu
     std::array<mutables_ui::Parameter, kNumGateOutParams> gate_out_params_;  // Children of Gate Out submenu
-    std::array<mutables_ui::Parameter, kNumAudioInParams> audio_in_params_;  // Children of Audio In submenu
+    std::array<mutables_ui::Parameter, kNumAudioIn2Params> audio_in2_params_;  // Children of Audio In 2 submenu (AM/RM/XFADE)
+    std::array<mutables_ui::Parameter, kNumAudioInParams> audio_in3_params_;  // Children of Audio In 3 submenu
+    std::array<mutables_ui::Parameter, kNumAudioInParams> audio_in4_params_;  // Children of Audio In 4 submenu
     
     // Bank and engine system
     static const char* bank_names_[];
@@ -119,16 +122,18 @@ private:
     int clock_div_counter_;         // For clock divider
     bool gate_out_state_;           // Current gate output state
     
-    // Audio input processing (IN3 = audio-derived modulation)
-    AudioEnvProcessor audio_env_processor_;
+    // Audio input processing (IN3 and IN4 = audio-derived modulation)
+    AudioEnvProcessor audio_env_processor_3_;  // IN3
+    AudioEnvProcessor audio_env_processor_4_;  // IN4
     
     void UpdatePatchFromParams();
     void SetupParameters();
     void UpdateEngineListForBank(int bank);
     int GetActualEngineIndex(int bank, int engine_in_bank);
     void UpdateCVModulatorsFromParams();
-    void UpdateAudioEnvFromParams();
+    void UpdateAudioEnvFromParams(AudioEnvProcessor& processor, std::array<mutables_ui::Parameter, kNumAudioInParams>& params);
     void SetupCVOutParams(std::array<mutables_ui::Parameter, kNumCVOutParams>& params, const char* name_prefix);
+    void SetupAudioInParams(std::array<mutables_ui::Parameter, kNumAudioInParams>& params);
     
 public:
     // MIDI interface

@@ -222,6 +222,7 @@ public:
         env_follower_.Init(sample_rate);
         transient_detector_.Init(sample_rate);
         mode_ = AudioEnvMode::OFF;
+        input_gain_ = 1.0f;
         timbre_amount_ = 0.0f;
         morph_amount_ = 0.0f;
         current_env_ = 0.0f;
@@ -230,6 +231,10 @@ public:
     
     void SetMode(AudioEnvMode mode) { mode_ = mode; }
     AudioEnvMode GetMode() const { return mode_; }
+    
+    // Input gain (1.0 - 10.0 for line level signals)
+    void SetGain(float gain) { input_gain_ = std::max(1.0f, std::min(gain, 10.0f)); }
+    void SetGainNormalized(float value) { input_gain_ = 1.0f + value * 9.0f; }  // 0-1 -> 1x-10x
     
     // Modulation amounts: -1.0 to +1.0
     void SetTimbreAmount(float amount) { 
@@ -255,11 +260,28 @@ public:
             return;
         }
         
+        // Apply input gain for line-level signals
         if (mode_ == AudioEnvMode::ENV) {
-            current_env_ = env_follower_.ProcessBlock(input, size);
+            // Process each sample with gain applied
+            for (size_t i = 0; i < size; i++) {
+                float gained = input[i] * input_gain_;
+                env_follower_.Process(gained);
+            }
+            // Scale envelope to useful modulation range
+            // Raw envelope tracks amplitude (typically 0-0.5 for hot signals)
+            // Scale by ~4x and clamp to get more usable 0-1 range
+            float raw_env = env_follower_.GetEnvelope();
+            current_env_ = std::min(1.0f, raw_env * 4.0f);
             trigger_detected_ = false;
         } else if (mode_ == AudioEnvMode::TRIG) {
-            trigger_detected_ = transient_detector_.ProcessBlock(input, size);
+            // Process each sample with gain applied
+            trigger_detected_ = false;
+            for (size_t i = 0; i < size; i++) {
+                float gained = input[i] * input_gain_;
+                if (transient_detector_.Process(gained)) {
+                    trigger_detected_ = true;
+                }
+            }
             // Also track envelope for display/debugging
             current_env_ = transient_detector_.IsTriggerActive() ? 1.0f : 0.0f;
         }
@@ -298,6 +320,7 @@ private:
     TransientDetector transient_detector_;
     
     AudioEnvMode mode_ = AudioEnvMode::OFF;
+    float input_gain_ = 1.0f;
     float timbre_amount_ = 0.0f;
     float morph_amount_ = 0.0f;
     float current_env_ = 0.0f;
