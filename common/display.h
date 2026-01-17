@@ -147,7 +147,10 @@ public:
             
             hw_->display.SetCursor(76, y + 2);
             hw_->display.WriteString(buffer, Font_7x10, !editing);
-            // Submenu indicator
+        }
+        
+        // Submenu indicator (only for SUB type, not mappable params)
+        if (param.type == ParamType::SUB) {
             hw_->display.SetCursor(121, y + 1);
             hw_->display.WriteString(">", Font_7x10, true);
         }
@@ -628,7 +631,7 @@ private:
         }
         
         // Submenu indicator (only for SUB type, not mappable params)
-        if (param.type == ParamType::SUB) {
+        if (param.type == ParamType::SUB || param.type == ParamType::SAVE || param.type == ParamType::LOAD) {
             hw_->display.SetCursor(121, y + 1);
             hw_->display.WriteString(">", Font_7x10, true);
         }
@@ -642,7 +645,14 @@ private:
         hw_->display.WriteString("*", Font_7x10, true);
     }
     
-    void FormatValue(const Parameter& param, char* buffer, size_t size) {
+    void FormatValue(const Parameter& param, char* buffer, size_t size, 
+                     const Parameter* siblings = nullptr, uint8_t sibling_count = 0, uint8_t param_index = 0) {
+        // Check for custom format callback first
+        if (param.format_callback) {
+            param.format_callback(&param, siblings, sibling_count, param_index, buffer, size);
+            return;
+        }
+        
         switch (param.type) {
             case ParamType::ENUM:
                 snprintf(buffer, size, "%.6s", param.GetEnumLabel());

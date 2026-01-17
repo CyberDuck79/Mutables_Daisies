@@ -3,6 +3,7 @@
 #include "../common/module_base.h"
 #include "../common/parameter.h"
 #include "cv_modulator.h"
+#include "audio_processors.h"
 #include <array>
 
 // Forward declarations for Plaits classes
@@ -65,15 +66,17 @@ private:
     uint8_t buffer_[kBufferSize];
     
     // Parameters
-    static constexpr int kNumParams = 19;  // Bank, Engine, Frequency, Harmonics, Timbre, Morph, Level, V/Oct, LPG Color, LPG Decay, Octave, Volume, MIDI Ch, CV Out 1 (SUB), CV Out 2 (SUB), Gate Out (SUB), User Data (SUB), Save, Load
+    static constexpr int kNumParams = 20;  // Bank, Engine, Frequency, Harmonics, Timbre, Morph, Level, V/Oct, LPG Color, LPG Decay, Octave, Volume, MIDI Ch, CV Out 1 (SUB), CV Out 2 (SUB), Gate Out (SUB), Audio In (SUB), User Data (SUB), Save, Load
     static constexpr int kNumUserDataParams = 5;  // 3 FM banks + wavetable + wave terrain
     static constexpr int kNumCVOutParams = 12;  // Mode, Attack, Release, Shape, Slew (RndSmth), SH_Src (S&H), Sync, Rate, Amp, Phase, Gate Mode, Clk Div
     static constexpr int kNumGateOutParams = 2;  // Mode, Clk Div
+    static constexpr int kNumAudioInParams = 7;  // Mode, Timbre±, Morph±, Attack, Release, Threshold, Holdoff
     std::array<mutables_ui::Parameter, kNumParams> params_;
     std::array<mutables_ui::Parameter, kNumUserDataParams> user_data_params_;  // Children of User Data submenu
     std::array<mutables_ui::Parameter, kNumCVOutParams> cv_out1_params_;  // Children of CV Out 1 submenu
     std::array<mutables_ui::Parameter, kNumCVOutParams> cv_out2_params_;  // Children of CV Out 2 submenu
     std::array<mutables_ui::Parameter, kNumGateOutParams> gate_out_params_;  // Children of Gate Out submenu
+    std::array<mutables_ui::Parameter, kNumAudioInParams> audio_in_params_;  // Children of Audio In submenu
     
     // Bank and engine system
     static const char* bank_names_[];
@@ -116,11 +119,15 @@ private:
     int clock_div_counter_;         // For clock divider
     bool gate_out_state_;           // Current gate output state
     
+    // Audio input processing (IN3 = audio-derived modulation)
+    AudioEnvProcessor audio_env_processor_;
+    
     void UpdatePatchFromParams();
     void SetupParameters();
     void UpdateEngineListForBank(int bank);
     int GetActualEngineIndex(int bank, int engine_in_bank);
     void UpdateCVModulatorsFromParams();
+    void UpdateAudioEnvFromParams();
     void SetupCVOutParams(std::array<mutables_ui::Parameter, kNumCVOutParams>& params, const char* name_prefix);
     
 public:
