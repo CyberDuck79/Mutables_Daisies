@@ -484,6 +484,9 @@ public:
         return (current_sample - last_clock_time_) < timeout;
     }
     
+    // Get last gate state (for edge detection before Process)
+    bool GetLastState() const { return last_gate_state_; }
+    
 private:
     uint32_t last_clock_time_;
     uint32_t clock_period_samples_;

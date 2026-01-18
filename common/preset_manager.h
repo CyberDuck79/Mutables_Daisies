@@ -16,7 +16,7 @@ static constexpr uint32_t PRESET_MAGIC = 0x4D495044;  // "MIPD" - Mutable Instru
 static constexpr uint16_t PRESET_VERSION = 2;         // Version 2 adds user_data_filename
 static constexpr size_t MAX_PRESET_NAME = 16;
 static constexpr size_t MAX_PRESETS = 99;             // Practical limit for embedded RAM
-static constexpr size_t MAX_PARAMS = 32;
+static constexpr size_t MAX_PARAMS = 128;             // Root params + all SUB children (currently ~87)
 
 // Binary format for a single parameter's mapping config
 struct MappingData {

@@ -70,7 +70,7 @@ private:
     static constexpr int kNumParams = 21;  // Bank, Engine, Frequency, Harmonics, Timbre, Morph, Level, V/Oct, Filter (SUB), Volume, Settings (SUB), CV Out 1 (SUB), CV Out 2 (SUB), Gate Out (SUB), Audio In 1 (SUB), Audio In 2 (SUB), Audio In 3 (SUB), Audio In 4 (SUB), User Data (SUB), Save, Load
     static constexpr int kNumUserDataParams = 5;  // 3 FM banks + wavetable + wave terrain
     static constexpr int kNumCVOutParams = 13;  // Mode, Attack, Release, Shape, Slew (RndSmth), SH_Src (S&H), Sync, Rate, Retrig, Amp, Phase, Scale3 (Foll.3), Scale4 (Foll.4)
-    static constexpr int kNumGateOutParams = 2;  // Mode, Clk Div
+    static constexpr int kNumGateOutParams = 3;  // Mode, Clk Div, Prob
     static constexpr int kNumAudioInParams = 8;  // Mode, Gain, Timbre±, Morph±, Attack, Release, Threshold, Holdoff
     static constexpr int kNumAudioIn1Params = 4;  // Mode, Gain, Level, Timbre (Stage 1: IN1, 7 algorithms)
     static constexpr int kNumAudioIn2Params = 4;  // Mode, Gain, Level, Timbre (Stage 2: IN2, 8 algorithms with Vocoder)

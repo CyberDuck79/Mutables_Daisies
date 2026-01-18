@@ -79,12 +79,13 @@ static constexpr int kNumCVOutModes = 5;
 
 // Gate output mode names (for physical Gate Out jack)
 static const char* gate_out_mode_names[] = {
-    "MIDIGt",    // MIDI gate pass-through
+    "Trig",   // Trigger on Gate 1 rise OR MIDI note on
     "EndEnv",    // Trigger on envelope end
-    "Trig",      // Short trigger on note
-    "ClkDiv"     // Clock divider
+    "TrigPrb",  // Trigger with probability
+    "ClkDiv",    // Clock divider (MIDI clock or Gate 2)
+    "ClkPrb"    // Clock tick with probability
 };
-static constexpr int kNumGateOutModes = 4;
+static constexpr int kNumGateOutModes = 5;
 
 // Clock divider ratio names (for Gate Out ClkDiv mode)
 static const char* clk_div_names[] = {
@@ -99,7 +100,8 @@ static const int clk_div_values[] = {
 // Gate Out parameter indices
 enum GateOutParamIndex {
     GATEOUT_MODE = 0,
-    GATEOUT_CLK_DIV = 1
+    GATEOUT_CLK_DIV = 1,
+    GATEOUT_PROB = 2
 };
 
 // Visibility callback for Gate Out params
@@ -113,9 +115,19 @@ static bool GateOutVisibilityCallback(const mutables_ui::Parameter* siblings, ui
             return true;  // Always visible
         case GATEOUT_CLK_DIV:
             return (mode == 3);  // Only for ClkDiv mode
+        case GATEOUT_PROB:
+            return (mode == 2 || mode == 4);  // Only for TrigProb and ClkProb modes
         default:
             return true;
     }
+}
+
+// Format callback for Gate Out probability parameter
+static void GateOutFormatCallback(const mutables_ui::Parameter* param, const mutables_ui::Parameter* siblings, uint8_t sibling_count, uint8_t param_index, char* buffer, size_t buffer_size) {
+    (void)siblings;
+    (void)sibling_count;
+    (void)param_index;
+    snprintf(buffer, buffer_size, "%d%%", static_cast<int>(param->value * 100.0f));
 }
 
 // Audio Input (envelope/trigger) mode names
@@ -738,6 +750,10 @@ void PlaitsPort::SetupParameters() {
     params_[7] = mutables_ui::Parameter::CV("V/Oct");
     params_[7].value = 0.5f;  // Default to center (2.5V = 0 semitones)
 
+    // Volume - scales output level (1.0 = full, useful for eurorack compatibility)
+    // Can add velocity mod for standard velocity->volume behavior
+    params_[8] = mutables_ui::Parameter::Knob("Volume", 0.0f, 1.0f, 1.0f);  // Default to full
+
     // Filter submenu (Moog ladder filter, post Stage 2)
     // Signal flow: Plaits -> Stage 1 -> Stage 2 -> Filter -> Output
     filter_params_[FILTER_MODE] = mutables_ui::Parameter::Enum("Mode", filter_mode_names, kNumFilterModes);
@@ -752,11 +768,7 @@ void PlaitsPort::SetupParameters() {
     for (int i = 0; i < kNumFilterParams; i++) {
         filter_params_[i].visibility_callback = FilterVisibilityCallback;
     }
-    params_[8] = mutables_ui::Parameter::Sub("Filter", filter_params_.data(), kNumFilterParams);
-    
-    // Volume - scales output level (1.0 = full, useful for eurorack compatibility)
-    // Can add velocity mod for standard velocity->volume behavior
-    params_[9] = mutables_ui::Parameter::Knob("Volume", 0.0f, 1.0f, 1.0f);  // Default to full
+    params_[9] = mutables_ui::Parameter::Sub("Filter", filter_params_.data(), kNumFilterParams);
 
     // Settings submenu (groups LPG and other settings from Plaits manual)
     settings_params_[0] = mutables_ui::Parameter::Knob("LPG Color", 0.0f, 1.0f, 0.5f);
@@ -776,8 +788,10 @@ void PlaitsPort::SetupParameters() {
     params_[12] = mutables_ui::Parameter::Sub("CV Out 2", cv_out2_params_.data(), kNumCVOutParams);
 
     // Gate Output submenu
-    gate_out_params_[0] = mutables_ui::Parameter::Enum("Mode", gate_out_mode_names, kNumGateOutModes);
-    gate_out_params_[1] = mutables_ui::Parameter::Enum("ClkDiv", clk_div_names, kNumClkDivs);
+    gate_out_params_[GATEOUT_MODE] = mutables_ui::Parameter::Enum("Mode", gate_out_mode_names, kNumGateOutModes);
+    gate_out_params_[GATEOUT_CLK_DIV] = mutables_ui::Parameter::Enum("ClkDiv", clk_div_names, kNumClkDivs);
+    gate_out_params_[GATEOUT_PROB] = mutables_ui::Parameter::Knob("Prob", 0.0f, 1.0f, 0.5f);  // 0-100% probability
+    gate_out_params_[GATEOUT_PROB].format_callback = GateOutFormatCallback;
     for (int i = 0; i < kNumGateOutParams; i++) {
         gate_out_params_[i].visibility_callback = GateOutVisibilityCallback;
     }
@@ -1225,7 +1239,7 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         // Gate Output processing
         int gate_out_mode = gate_out_params_[GATEOUT_MODE].GetIndex();
         
-        // EndEnv mode: detect when envelope ends (lpg_gain drops below threshold)
+        // EndEnv mode (1): detect when envelope ends (lpg_gain drops below threshold)
         if (gate_out_mode == 1) {
             constexpr float kEnvThreshold = 0.01f;
             if (prev_lpg_gain_ > kEnvThreshold && lpg_gain <= kEnvThreshold) {
@@ -1236,27 +1250,8 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
             prev_lpg_gain_ = lpg_gain;
         }
         
-        // Trig mode: countdown the trigger pulse
-        if (gate_out_mode == 2 && gate_out_trigger_counter_ > 0) {
-            if (gate_out_trigger_counter_ > block_size) {
-                gate_out_trigger_counter_ -= block_size;
-            } else {
-                gate_out_trigger_counter_ = 0;
-            }
-        }
-        
-        // EndEnv mode: also countdown the trigger pulse
-        if (gate_out_mode == 1 && gate_out_state_ && gate_out_trigger_counter_ > 0) {
-            if (gate_out_trigger_counter_ > block_size) {
-                gate_out_trigger_counter_ -= block_size;
-            } else {
-                gate_out_trigger_counter_ = 0;
-                gate_out_state_ = false;
-            }
-        }
-        
-        // ClkDiv mode: countdown the trigger pulse
-        if (gate_out_mode == 3 && gate_out_state_ && gate_out_trigger_counter_ > 0) {
+        // Countdown trigger pulse for modes that use it (Trigger, EndEnv, TrigProb, ClkDiv, ClkProb)
+        if (gate_out_trigger_counter_ > 0) {
             if (gate_out_trigger_counter_ > block_size) {
                 gate_out_trigger_counter_ -= block_size;
             } else {
@@ -1266,8 +1261,8 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         }
         
         // Get volume with velocity modulation
-        float vol_vel = midi_velocity_ * params_[9].mapping.velocity_amount;  // Volume parameter
-        float volume = std::clamp(params_[9].value + vol_vel, 0.0f, 1.0f);
+        float vol_vel = midi_velocity_ * params_[8].mapping.velocity_amount;  // Volume parameter
+        float volume = std::clamp(params_[8].value + vol_vel, 0.0f, 1.0f);
         
         // Convert from short to float, apply volume, and copy to outputs
         // OUT (wet) -> channel 1, AUX (wet) -> channel 2
@@ -1300,16 +1295,54 @@ void PlaitsPort::ProcessGate(int gate_index, bool state) {
         if (state && !gate_state_) {
             cv_modulator_1_.Trigger();
             cv_modulator_2_.Trigger();
+            
+            // Gate Output: Trigger and TrigProb modes respond to Gate 1 rise
+            int gate_out_mode = gate_out_params_[GATEOUT_MODE].GetIndex();
+            if (gate_out_mode == 0) {  // Trigger mode
+                gate_out_state_ = true;
+                gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);  // 10ms trigger
+            } else if (gate_out_mode == 2) {  // TrigProb mode
+                float prob = gate_out_params_[GATEOUT_PROB].value;
+                float rand_val = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+                if (rand_val < prob) {
+                    gate_out_state_ = true;
+                    gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);
+                }
+            }
         }
         gate_state_ = state;
     } else if (gate_index == 1) {
-        // Gate 2: Clock input for LFO sync
+        // Gate 2: Clock input for LFO sync and ClkDiv/ClkProb modes
+        bool prev_gate2 = gate2_clock_tracker_.GetLastState();
         gate2_clock_tracker_.Process(state, sample_counter_);
         // Update clock Hz for modulators
         if (gate2_clock_tracker_.IsActive(sample_counter_, sample_rate_)) {
             gate2_clock_hz_ = gate2_clock_tracker_.GetClockHz(sample_rate_);
         } else {
             gate2_clock_hz_ = 0.0f;
+        }
+        
+        // Gate 2 rising edge: process for ClkDiv and ClkProb modes (when no MIDI clock)
+        if (state && !prev_gate2 && midi_clock_hz_ == 0.0f) {
+            int gate_out_mode = gate_out_params_[GATEOUT_MODE].GetIndex();
+            if (gate_out_mode == 3) {  // ClkDiv mode
+                clock_div_counter_++;
+                int divider_idx = gate_out_params_[GATEOUT_CLK_DIV].GetIndex();
+                // For Gate 2 input, divide by the selected ratio directly (not ppq-based)
+                static const int gate2_div_values[] = {1, 2, 3, 4, 6, 8, 12, 16, 24, 32};
+                if (clock_div_counter_ >= gate2_div_values[divider_idx]) {
+                    clock_div_counter_ = 0;
+                    gate_out_state_ = true;
+                    gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);
+                }
+            } else if (gate_out_mode == 4) {  // ClkProb mode
+                float prob = gate_out_params_[GATEOUT_PROB].value;
+                float rand_val = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+                if (rand_val < prob) {
+                    gate_out_state_ = true;
+                    gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);
+                }
+            }
         }
     }
 }
@@ -1385,14 +1418,22 @@ void PlaitsPort::OnMIDIClock() {
         midi_clock_hz_ = 0.0f;
     }
     
-    // Gate Output clock divider mode
-    if (gate_out_params_[GATEOUT_MODE].GetIndex() == 3) {  // ClkDiv mode
+    // Gate Output clock modes (MIDI clock has priority over Gate 2)
+    int gate_out_mode = gate_out_params_[GATEOUT_MODE].GetIndex();
+    if (gate_out_mode == 3) {  // ClkDiv mode
         clock_div_counter_++;
         int divider = clk_div_values[gate_out_params_[GATEOUT_CLK_DIV].GetIndex()];
         if (clock_div_counter_ >= divider) {
             clock_div_counter_ = 0;
             gate_out_state_ = true;
             gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);  // 10ms trigger
+        }
+    } else if (gate_out_mode == 4) {  // ClkProb mode - trigger on each MIDI clock tick with probability
+        float prob = gate_out_params_[GATEOUT_PROB].value;
+        float rand_val = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+        if (rand_val < prob) {
+            gate_out_state_ = true;
+            gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);
         }
     }
 }
@@ -1415,9 +1456,18 @@ void PlaitsPort::NoteOn(uint8_t note, uint8_t velocity) {
     cv_modulator_1_.Trigger();
     cv_modulator_2_.Trigger();
     
-    // Gate Output Trig mode: start trigger pulse on note on
-    if (gate_out_params_[GATEOUT_MODE].GetIndex() == 2) {
+    // Gate Output: Trigger and TrigProb modes respond to MIDI note on
+    int gate_out_mode = gate_out_params_[GATEOUT_MODE].GetIndex();
+    if (gate_out_mode == 0) {  // Trigger mode
+        gate_out_state_ = true;
         gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);  // 10ms trigger
+    } else if (gate_out_mode == 2) {  // TrigProb mode
+        float prob = gate_out_params_[GATEOUT_PROB].value;
+        float rand_val = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+        if (rand_val < prob) {
+            gate_out_state_ = true;
+            gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);
+        }
     }
 }
 
@@ -1438,21 +1488,23 @@ bool PlaitsPort::GetGateOutput() const {
     int mode = gate_out_params_[GATEOUT_MODE].GetIndex();
     
     switch(mode) {
-        case 0:  // MIDIGt - MIDI gate pass-through
-            return midi_gate_;
+        case 0:  // Trigger - Gate 1 rise OR MIDI note on
+            return gate_out_trigger_counter_ > 0;
             
         case 1:  // EndEnv - Trigger at end of envelope
-            // This is set by Process() when envelope ends
             return gate_out_state_;
             
-        case 2:  // Trig - Short trigger on note
+        case 2:  // TrigProb - Trigger with probability
             return gate_out_trigger_counter_ > 0;
             
         case 3:  // ClkDiv - Clock divider
             return gate_out_state_;
             
+        case 4:  // ClkProb - Clock tick with probability
+            return gate_out_trigger_counter_ > 0;
+            
         default:
-            return midi_gate_;
+            return false;
     }
 }
 

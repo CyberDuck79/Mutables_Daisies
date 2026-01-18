@@ -8,26 +8,56 @@
 
 namespace mutables_ui {
 
+// Logo drawing callback type
+using LogoDrawFunc = void (*)(daisy::OledDisplay<daisy::SSD130x4WireSpi128x64Driver>&, int, int);
+
 class Display {
 public:
-    Display() : hw_(nullptr) {}
+    Display() : hw_(nullptr), logo_draw_func_(nullptr) {}
     
-    void Init(daisy::DaisyPatch* hw) {
+    void Init(daisy::DaisyPatch* hw, LogoDrawFunc logo_func = nullptr) {
         hw_ = hw;
+        logo_draw_func_ = logo_func;
     }
     
-    // Render boot screen with module name
-    void RenderBootScreen(const char* module_name) {
+    // Render boot screen with logo (left), brand and module name (right)
+    void RenderBootScreen(const char* module_name, const char* brand_name = "Ducktronics") {
         if (!hw_) return;
         
         hw_->display.Fill(false);
         
-        int text_len = strlen(module_name);
-        int x = (128 - (text_len * 7)) / 2;
-        int y = (64 - 10) / 2;
-        
-        hw_->display.SetCursor(x, y);
-        hw_->display.WriteString(module_name, Font_7x10, true);
+        if (logo_draw_func_) {
+            // Layout: Logo on left (54x54), text on right (74 pixels)
+            // Logo centered vertically: (64-54)/2 = 5
+            logo_draw_func_(hw_->display, 0, 5);
+            
+            // Text area starts at x=56 (54 + 2px margin)
+            const int text_x = 56;
+            const int text_width = 128 - text_x;  // 72 pixels
+            
+            // Brand name centered in text area, at y=18
+            int brand_len = strlen(brand_name);
+            int brand_x = text_x + (text_width - brand_len * 6) / 2;
+            hw_->display.SetCursor(brand_x, 18);
+            hw_->display.WriteString(brand_name, Font_6x8, true);
+            
+            // Separator line
+            hw_->display.DrawLine(text_x + 4, 30, 124, 30, true);
+            
+            // Module name centered in text area, at y=40
+            int name_len = strlen(module_name);
+            int name_x = text_x + (text_width - name_len * 7) / 2;
+            hw_->display.SetCursor(name_x, 40);
+            hw_->display.WriteString(module_name, Font_7x10, true);
+        } else {
+            // Fallback: centered text only (no logo)
+            int text_len = strlen(module_name);
+            int x = (128 - (text_len * 7)) / 2;
+            int y = (64 - 10) / 2;
+            
+            hw_->display.SetCursor(x, y);
+            hw_->display.WriteString(module_name, Font_7x10, true);
+        }
         
         hw_->display.Update();
     }
@@ -65,13 +95,13 @@ public:
             snprintf(title, sizeof(title), "< %.10s", parent->name);
             // Draw white background for selected title
             hw_->display.DrawRect(0, 0, 127, 9, true, true);
-            hw_->display.SetCursor(0, 0);
+            hw_->display.SetCursor(0, 1);
             hw_->display.WriteString(title, Font_6x8, false);  // Inverted
         } else {
             snprintf(title, sizeof(title), "%.12s", parent->name);
-            hw_->display.SetCursor(0, 0);
+            hw_->display.SetCursor(0, 1);
             hw_->display.WriteString(title, Font_6x8, true);
-            hw_->display.DrawLine(0, 9, 127, 9, true);
+            hw_->display.DrawLine(0, 10, 127, 10, true);
         }
         
         int line = 12;
@@ -546,6 +576,7 @@ public:
     
 private:
     daisy::DaisyPatch* hw_;
+    LogoDrawFunc logo_draw_func_;
     
     const char* GetMappingSourceName(MappingSource source, int cc_number) {
         switch (source) {
@@ -655,7 +686,7 @@ private:
         
         switch (param.type) {
             case ParamType::ENUM:
-                snprintf(buffer, size, "%.6s", param.GetEnumLabel());
+                snprintf(buffer, size, "%.7s", param.GetEnumLabel());
                 break;
             case ParamType::MIDI:
                 snprintf(buffer, size, "CH%d", param.GetIndex() + 1);

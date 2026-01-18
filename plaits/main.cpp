@@ -2,6 +2,7 @@
 #include "daisysp.h"
 #include "plaits_port.h"
 #include "user_data_manager.h"
+#include "logo_bitmap.h"
 #include "../common/parameter.h"
 #include "../common/ui_state.h"
 #include "../common/cv_input.h"
@@ -961,10 +962,10 @@ int main(void) {
     plaits::g_user_data_provider = &user_data_manager;
     
     menu.param_count = plaits_module.GetParameterCount();
-    display.Init(&hw);
+    display.Init(&hw, DrawPlaitsLogo);  // Pass logo drawing function
     
-    display.RenderBootScreen("PLAITS");
-    System::Delay(2800);
+    display.RenderBootScreen("Plaitsy");
+    System::Delay(3000);
     
     hw.StartAdc();
     hw.StartAudio(AudioCallback);
