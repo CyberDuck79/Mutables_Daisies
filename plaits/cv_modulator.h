@@ -110,6 +110,7 @@ public:
         phase_offset_ = 0.0f;  // 0-1 normalized
         slew_amount_ = 0.5f;   // RndSmth slew amount (0=instant, 1=very slow)
         sh_source_ = SHSource::RANDOM;  // S&H source
+        retrig_ = false;   // Reset LFO phase on note trigger
         
         // Follow mode params
         follow_scale_3_ = 1.0f;  // 0.0x to 2.0x scaling for IN3
@@ -144,10 +145,13 @@ public:
         slew_coeff_ = 1.0f - expf(-1.0f / (slew_time * block_rate_));
     }
     
-    // Trigger for AD envelope
+    // Trigger for AD envelope and LFO retrig
     void Trigger() {
         if (mode_ == CVOutMode::AD) {
             env_stage_ = 1;  // Start attack
+        }
+        if (mode_ == CVOutMode::LFO && retrig_) {
+            lfo_phase_ = 0.0f;  // Reset to start (phase_offset_ is applied during output)
         }
     }
     
@@ -206,6 +210,7 @@ public:
     void SetPhaseOffset(float phase) { phase_offset_ = phase; }
     void SetSlewAmount(float slew) { slew_amount_ = slew; }
     void SetSHSource(SHSource source) { sh_source_ = source; }
+    void SetRetrig(bool retrig) { retrig_ = retrig; }
     void SetFollowScale3(float scale) { follow_scale_3_ = scale; }
     void SetFollowScale4(float scale) { follow_scale_4_ = scale; }
     
@@ -366,6 +371,7 @@ private:
     float phase_offset_;
     float slew_amount_;
     SHSource sh_source_;
+    bool retrig_;
     float follow_scale_3_;
     float follow_scale_4_;
     
