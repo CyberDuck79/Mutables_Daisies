@@ -59,35 +59,35 @@ The component files serve as **reference implementations** for future modular po
 
 ## 🟡 Phase 2: Function Extraction
 
-### 2.1 `plaits_port.cpp` - SetupParameters() (~190 lines)
-- [ ] `SetupMainParameters()` - Bank, Engine, Freq, Harm, Timbre, Morph, Level, V/Oct, Volume
-- [ ] `SetupFilterParameters()` - Filter submenu (Mode, Freq, Reso, Drive)
-- [ ] `SetupSettingsParameters()` - Settings submenu (LPG Color, Decay, Octave, MIDI Ch)
-- [ ] `SetupCVOutParameters()` - CV Out 1 & 2 submenus
-- [ ] `SetupGateOutParameters()` - Gate Out 1 submenu
-- [ ] `SetupAudioInputParameters()` - Audio In 1-4 submenus
-- [ ] `SetupUserDataParameters()` - User Data submenu
+### 2.1 `plaits_port.cpp` - SetupParameters() ✅ SKIPPED
+- Already well-organized (128 lines) with helper functions:
+  - `SetupCVOutParams()` - CV Output submenu setup
+  - `SetupAudioInParams()` - Audio Input submenu setup
+- Further splitting would add artificial complexity
 
-### 2.2 `plaits_port.cpp` - Process() (~150 lines)
-- [ ] `UpdateAudioInputModulation()` - Read audio inputs, apply modulation
-- [ ] `ProcessWarpsStages()` - Warps Lite Stage 1 & 2 setup
-- [ ] `ProcessVoice()` - Main Plaits voice rendering
-- [ ] `ProcessFilter()` - Filter chain processing
-- [ ] `ProcessCVOutputs()` - CV modulator processing + output
+### 2.2 `plaits_port.cpp` - Process() ✅ SKIPPED
+- Well-organized (236 lines) with clear section comments
+- Tightly coupled stages share state (`frames[]`, `patch_`, `modulations_`)
+- Extraction would require passing 5+ parameters per function
+- Decision: Keep as-is, code is already readable
 
-### 2.3 `main.cpp` - UpdateEncoder() (~250 lines)
-- [ ] `HandleNavigateState()` - Main menu navigation
-- [ ] `HandleEditValueState()` - Value editing
-- [ ] `HandleSubmenuState()` - Submenu navigation
-- [ ] `HandleSubmenuEditState()` - Submenu value editing
-- [ ] `HandleSubState()` - SUB parameter navigation/editing
-- [ ] `HandleCharInputState()` - Preset name input
-- [ ] `HandlePresetListState()` - Preset loading
-- [ ] `HandleFileBrowserState()` - File browsing
+### 2.3 `main.cpp` - UpdateEncoder() ✅ DONE
+- [x] Created `plaits/encoder_handlers.h` (560 lines) with:
+  - `CycleMappingSource()` - Mapping source cycling helper
+  - `HandleNavigate()` - Main menu navigation
+  - `HandleEditValue()` - Value editing
+  - `HandleSubmenu()` - Submenu navigation
+  - `HandleSubmenuEdit()` - Submenu value editing
+  - `HandleCharInput()` - Preset name input
+  - `HandlePresetList()` - Preset loading
+  - `HandleFileBrowser()` - File browsing
 
-### 2.4 `main.cpp` - AudioCallback() (~110 lines)
-- [ ] Move parameter mapping to `UpdateParameterMappings()` 
-- [ ] Keep only essential audio I/O in callback
+**Note:** Handlers are available for reuse but main.cpp still uses inline switch for audio restart control.
+
+### 2.4 `main.cpp` - AudioCallback() ✅ SKIPPED
+- Already well-organized with parameter mapping in-place
+- Moving to separate function would require passing many globals
+- Audio callback needs minimal latency, inline is appropriate
 
 ---
 

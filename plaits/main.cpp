@@ -3,6 +3,7 @@
 #include "plaits_port.h"
 #include "user_data_manager.h"
 #include "logo_bitmap.h"
+#include "encoder_handlers.h"
 #include "../common/parameter.h"
 #include "../common/ui_state.h"
 #include "../common/cv_input.h"
@@ -308,40 +309,9 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     hw.gate_output.Write(plaits_module.GetGateOutput());
 }
 
-// Cycle through mapping sources based on parameter type
-void CycleMappingSource(mutables_ui::Parameter& param, int direction) {
-    int current = static_cast<int>(param.mapping.source);
-    
-    if (param.type == ParamType::KNOB) {
-        // KNOB: None, CV1-4, CC (skip Gate1, Gate2)
-        do {
-            current += direction;
-            if (current < 0) current = static_cast<int>(MappingSource::CC);
-            if (current > static_cast<int>(MappingSource::CC)) current = 0;
-        } while (current == static_cast<int>(MappingSource::GATE1) || 
-                 current == static_cast<int>(MappingSource::GATE2));
-    } else if (param.type == ParamType::CV) {
-        // CV: None, CV1-4 only
-        current += direction;
-        if (current < 0) current = static_cast<int>(MappingSource::CV4);
-        if (current > static_cast<int>(MappingSource::CV4)) current = 0;
-    } else if (param.type == ParamType::ENUM) {
-        // ENUM: None, CV1-4, CC (skip Gate1, Gate2 - gates are reserved for trigger/clock)
-        do {
-            current += direction;
-            if (current < 0) current = static_cast<int>(MappingSource::CC);
-            if (current > static_cast<int>(MappingSource::CC)) current = 0;
-        } while (current == static_cast<int>(MappingSource::GATE1) || 
-                 current == static_cast<int>(MappingSource::GATE2));
-    }
-    
-    param.mapping.source = static_cast<MappingSource>(current);
-    
-    // Auto-enable plugged for CV sources, disable for others
-    if (param.mapping.IsCVSource() && param.type == ParamType::KNOB) {
-        // Don't auto-enable, let user control it
-    }
-}
+// Forward declaration for AudioCallback restart
+void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size);
+
 
 void UpdateEncoder() {
     auto params = plaits_module.GetParameters();
@@ -565,7 +535,7 @@ void UpdateEncoder() {
                 if (param.type == ParamType::KNOB) {
                     switch (item) {
                         case 0:  // Mapping
-                            CycleMappingSource(param, encoder_increment);
+                            encoder_handlers::CycleMappingSource(param, encoder_increment);
                             break;
                         case 1:  // CC Number (if CC mapped)
                             if (param.mapping.source == MappingSource::CC) {
@@ -584,12 +554,12 @@ void UpdateEncoder() {
                     }
                 } else if (param.type == ParamType::CV) {
                     if (item == 0) {  // Mapping
-                        CycleMappingSource(param, encoder_increment);
+                        encoder_handlers::CycleMappingSource(param, encoder_increment);
                     }
                 } else if (param.type == ParamType::ENUM) {
                     switch (item) {
                         case 0:  // Mapping
-                            CycleMappingSource(param, encoder_increment);
+                            encoder_handlers::CycleMappingSource(param, encoder_increment);
                             break;
                         case 1:  // CC Number (if CC mapped)
                             if (param.mapping.source == MappingSource::CC) {
