@@ -2,8 +2,11 @@
 
 #include <cmath>
 #include <cstdint>
+#include "../common/constants.h"
 
 namespace mutables_plaits {
+
+using namespace mutables;
 
 // Audio-derived modulation modes
 enum class AudioEnvMode {
@@ -57,14 +60,14 @@ public:
         // Clamp to reasonable range
         attack_ms = std::max(0.5f, std::min(attack_ms, 500.0f));
         // Time constant: coeff = 1 - exp(-1 / (time_sec * sample_rate))
-        float time_sec = attack_ms * 0.001f;
+        float time_sec = attack_ms * kMsToSeconds;
         attack_coeff_ = 1.0f - std::exp(-1.0f / (time_sec * sample_rate_));
     }
     
     // Set release time in milliseconds (5ms - 2000ms recommended)
     void SetRelease(float release_ms) {
         release_ms = std::max(1.0f, std::min(release_ms, 5000.0f));
-        float time_sec = release_ms * 0.001f;
+        float time_sec = release_ms * kMsToSeconds;
         release_coeff_ = 1.0f - std::exp(-1.0f / (time_sec * sample_rate_));
     }
     
@@ -86,10 +89,10 @@ public:
     void Reset() { envelope_ = 0.0f; }
     
 private:
-    float sample_rate_ = 48000.0f;
+    float sample_rate_ = kDefaultSampleRate;
     float envelope_ = 0.0f;
     float attack_coeff_ = 0.1f;
-    float release_coeff_ = 0.01f;
+    float release_coeff_ = kDefaultRelease;
 };
 
 //=============================================================================
@@ -175,13 +178,13 @@ public:
     
     // Set threshold (0.0 - 1.0)
     void SetThreshold(float threshold) {
-        threshold_ = std::max(0.01f, std::min(threshold, 1.0f));
+        threshold_ = std::max(kMinThreshold, std::min(threshold, 1.0f));
     }
     
     // Set holdoff time in milliseconds (20ms - 500ms recommended)
     void SetHoldoff(float holdoff_ms) {
         holdoff_ms = std::max(10.0f, std::min(holdoff_ms, 500.0f));
-        holdoff_samples_ = static_cast<uint32_t>(holdoff_ms * 0.001f * sample_rate_);
+        holdoff_samples_ = static_cast<uint32_t>(holdoff_ms * kMsToSeconds * sample_rate_);
     }
     
     // Set holdoff from normalized value (20ms - 200ms range)

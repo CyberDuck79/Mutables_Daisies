@@ -3,10 +3,13 @@
 #include "daisy_patch.h"
 #include "parameter.h"
 #include "ui_state.h"
+#include "constants.h"
 #include <cstdio>
 #include <cstring>
 
 namespace mutables_ui {
+
+using namespace mutables;
 
 // Logo drawing callback type
 using LogoDrawFunc = void (*)(daisy::OledDisplay<daisy::SSD130x4WireSpi128x64Driver>&, int, int);

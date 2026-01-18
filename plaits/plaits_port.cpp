@@ -1,8 +1,11 @@
 #include "plaits_port.h"
 #include "../eurorack/plaits/dsp/voice.h"
 #include "../eurorack/stmlib/utils/buffer_allocator.h"
+#include "../common/constants.h"
 
 namespace mutables_plaits {
+
+using namespace mutables;
 
 // Bank names
 const char* PlaitsPort::bank_names_[] = {
@@ -200,7 +203,7 @@ static void AudioInFormatCallback(const mutables_ui::Parameter* param,
             {
                 float gain = 1.0f + value * 9.0f;  // 1x to 10x
                 // Calculate dB: 20 * log10(gain), using log10(x) = ln(x) / ln(10)
-                float db = 20.0f * std::log(gain) / 2.302585f;  // ln(10) ≈ 2.302585
+                float db = 20.0f * std::log(gain) / kLn10;
                 int db_int = static_cast<int>(db + 0.5f);
                 snprintf(buffer, buffer_size, "+%ddB", db_int);
             }
@@ -335,7 +338,7 @@ static void AudioModFormatCallback(const mutables_ui::Parameter* param,
             // 1x to 10x (0dB to +20dB) for line level signals
             {
                 float gain = 1.0f + value * 9.0f;  // 1x to 10x
-                float db = 20.0f * std::log(gain) / 2.302585f;  // ln(10) ≈ 2.302585
+                float db = 20.0f * std::log(gain) / kLn10;
                 int db_int = static_cast<int>(db + 0.5f);
                 snprintf(buffer, buffer_size, "+%ddB", db_int);
             }
@@ -641,12 +644,12 @@ PlaitsPort::PlaitsPort()
     , modulations_(nullptr)
     , allocator_(nullptr)
     , current_bank_(0)
-    , midi_note_(60.0f)
+    , midi_note_(kMidiNoteC4)
     , midi_velocity_(0.8f)
     , midi_gate_(false)
     , gate_state_(false)
     , previous_gate_(false)
-    , sample_rate_(48000.0f)
+    , sample_rate_(kDefaultSampleRate)
     , midi_clock_hz_(0.0f)
     , gate2_clock_hz_(0.0f)
     , sample_counter_(0) {
@@ -979,7 +982,7 @@ void PlaitsPort::UpdatePatchFromParams() {
     // MIDI note acts as V/Oct offset from C4 (middle C = note 60)
     // When MIDI note 60 is received, it adds 0 to base_note
     // MIDI note 72 adds +12 (one octave up), MIDI note 48 adds -12 (one octave down)
-    float midi_offset = midi_note_ - 60.0f;
+    float midi_offset = midi_note_ - kMidiNoteC4;
     
     // V/Oct CV input: 0-5V maps to ±30 semitones (2.5V = 0)
     // params_[7].value contains the raw CV (0.0-1.0)
@@ -988,7 +991,7 @@ void PlaitsPort::UpdatePatchFromParams() {
     if (params_[7].mapping.IsCVSource()) {
         // Use raw CV value for precision (0.0-1.0 corresponds to 0-5V)
         float voct_raw = params_[7].value;
-        voct_cv_offset = (voct_raw - 0.5f) * 60.0f;  // ±30 semitones
+        voct_cv_offset = (voct_raw - kCVCenter) * kVOctRange;  // ±30 semitones
     }
     
     patch_->note = base_note + midi_offset + voct_cv_offset;
@@ -1215,9 +1218,9 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
             // Apply filter to wet outputs (OUT and AUX)
             for (size_t j = 0; j < block_size; j++) {
                 // Filter the main output
-                float out_sample = static_cast<float>(frames[j].out) / 32768.0f;
+                float out_sample = static_cast<float>(frames[j].out) / kAudioScaleInt16;
                 float filtered_out = filter_.Process(out_sample);
-                frames[j].out = static_cast<int16_t>(std::clamp(filtered_out * 32768.0f, -32768.0f, 32767.0f));
+                frames[j].out = static_cast<int16_t>(std::clamp(filtered_out * kAudioScaleInt16, -kAudioScaleInt16, kAudioMaxInt16));
                 
                 // Note: AUX output could use a second filter instance for stereo,
                 // but for CPU efficiency we apply the same filter coefficients
@@ -1241,11 +1244,10 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         
         // EndEnv mode (1): detect when envelope ends (lpg_gain drops below threshold)
         if (gate_out_mode == 1) {
-            constexpr float kEnvThreshold = 0.01f;
             if (prev_lpg_gain_ > kEnvThreshold && lpg_gain <= kEnvThreshold) {
                 // Envelope just ended - set trigger
                 gate_out_state_ = true;
-                gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);  // 10ms trigger
+                gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * kTriggerDurationS);
             }
             prev_lpg_gain_ = lpg_gain;
         }
@@ -1268,10 +1270,10 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         // OUT (wet) -> channel 1, AUX (wet) -> channel 2
         // OUT_DRY -> channel 3, AUX_DRY -> channel 4
         for (size_t j = 0; j < block_size && (i + j) < size; j++) {
-            float out_sample = (static_cast<float>(frames[j].out) / 32768.0f) * volume;
-            float aux_sample = (static_cast<float>(frames[j].aux) / 32768.0f) * volume;
-            float out_dry_sample = (static_cast<float>(frames[j].out_dry) / 32768.0f) * volume;
-            float aux_dry_sample = (static_cast<float>(frames[j].aux_dry) / 32768.0f) * volume;
+            float out_sample = (static_cast<float>(frames[j].out) / kAudioScaleInt16) * volume;
+            float aux_sample = (static_cast<float>(frames[j].aux) / kAudioScaleInt16) * volume;
+            float out_dry_sample = (static_cast<float>(frames[j].out_dry) / kAudioScaleInt16) * volume;
+            float aux_dry_sample = (static_cast<float>(frames[j].aux_dry) / kAudioScaleInt16) * volume;
             out[0][i + j] = out_sample;      // OUT (wet) -> channel 1
             out[1][i + j] = aux_sample;      // AUX (wet) -> channel 2
             out[2][i + j] = out_dry_sample;  // OUT (dry) -> channel 3
@@ -1300,13 +1302,13 @@ void PlaitsPort::ProcessGate(int gate_index, bool state) {
             int gate_out_mode = gate_out_params_[GATEOUT_MODE].GetIndex();
             if (gate_out_mode == 0) {  // Trigger mode
                 gate_out_state_ = true;
-                gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);  // 10ms trigger
+                gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * kTriggerDurationS);  // 10ms trigger
             } else if (gate_out_mode == 2) {  // TrigProb mode
                 float prob = gate_out_params_[GATEOUT_PROB].value;
                 float rand_val = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
                 if (rand_val < prob) {
                     gate_out_state_ = true;
-                    gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);
+                    gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * kTriggerDurationS);
                 }
             }
         }
@@ -1333,14 +1335,14 @@ void PlaitsPort::ProcessGate(int gate_index, bool state) {
                 if (clock_div_counter_ >= gate2_div_values[divider_idx]) {
                     clock_div_counter_ = 0;
                     gate_out_state_ = true;
-                    gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);
+                    gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * kTriggerDurationS);
                 }
             } else if (gate_out_mode == 4) {  // ClkProb mode
                 float prob = gate_out_params_[GATEOUT_PROB].value;
                 float rand_val = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
                 if (rand_val < prob) {
                     gate_out_state_ = true;
-                    gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);
+                    gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * kTriggerDurationS);
                 }
             }
         }
@@ -1426,14 +1428,14 @@ void PlaitsPort::OnMIDIClock() {
         if (clock_div_counter_ >= divider) {
             clock_div_counter_ = 0;
             gate_out_state_ = true;
-            gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);  // 10ms trigger
+            gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * kTriggerDurationS);  // 10ms trigger
         }
     } else if (gate_out_mode == 4) {  // ClkProb mode - trigger on each MIDI clock tick with probability
         float prob = gate_out_params_[GATEOUT_PROB].value;
         float rand_val = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
         if (rand_val < prob) {
             gate_out_state_ = true;
-            gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);
+            gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * kTriggerDurationS);
         }
     }
 }
@@ -1460,13 +1462,13 @@ void PlaitsPort::NoteOn(uint8_t note, uint8_t velocity) {
     int gate_out_mode = gate_out_params_[GATEOUT_MODE].GetIndex();
     if (gate_out_mode == 0) {  // Trigger mode
         gate_out_state_ = true;
-        gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);  // 10ms trigger
+        gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * kTriggerDurationS);  // 10ms trigger
     } else if (gate_out_mode == 2) {  // TrigProb mode
         float prob = gate_out_params_[GATEOUT_PROB].value;
         float rand_val = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
         if (rand_val < prob) {
             gate_out_state_ = true;
-            gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * 0.01f);
+            gate_out_trigger_counter_ = static_cast<uint32_t>(sample_rate_ * kTriggerDurationS);
         }
     }
 }

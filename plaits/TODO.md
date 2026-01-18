@@ -1,7 +1,7 @@
 # My notes TODO
 ## Features
 
-- Global Refacto - put a maximum in common
+- Global Refacto - put a maximum in common → See [REFACTORING.md](../REFACTORING.md)
 
 - serum / pigments wavetables conversion ?
 

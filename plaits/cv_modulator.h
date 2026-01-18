@@ -3,8 +3,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include "../common/constants.h"
 
 namespace mutables_plaits {
+
+using namespace mutables;
 
 // CV Output modulator modes
 enum class CVOutMode {
@@ -246,7 +249,7 @@ private:
         } else if (env_stage_ == 2) {
             // Release phase
             env_value_ -= release_coeff * env_value_;
-            if (env_value_ <= 0.001f) {
+            if (env_value_ <= kEnvNearZero) {
                 env_value_ = 0.0f;
                 env_stage_ = 0;  // Done
             }

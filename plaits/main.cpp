@@ -8,11 +8,13 @@
 #include "../common/cv_input.h"
 #include "../common/display.h"
 #include "../common/preset_manager.h"
+#include "../common/constants.h"
 
 using namespace daisy;
 using namespace daisysp;
 using namespace mutables_ui;
 using namespace mutables_plaits;
+using namespace mutables;
 
 // Hardware
 DaisyPatch hw;
@@ -148,7 +150,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
         // CC replaces the knob as base value (not modulation)
         if (param.type == ParamType::KNOB && param.mapping.source == MappingSource::CC) {
             float cc_value = cc_values[param.mapping.cc_number];
-            param.SetNormalizedWithHysteresis(cc_value, 0.001f);
+            param.SetNormalizedWithHysteresis(cc_value, kCVHysteresis);
         }
         // Handle CV-mapped KNOB parameters
         else if (param.type == ParamType::KNOB && param.mapping.IsCVSource()) {
@@ -169,17 +171,17 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
             
             // For display purposes, still update param.value with the full calculation
             float mapped = CalculateMappedValue(param, param.value, cv_inputs);
-            param.SetNormalizedWithHysteresis(mapped, 0.001f);
+            param.SetNormalizedWithHysteresis(mapped, kCVHysteresis);
         }
         // Unmapped KNOB parameters: value is set by encoder, don't modify here
         // Velocity modulation is applied in the module when using the values
         else if (param.type == ParamType::CV && param.mapping.IsCVSource()) {
             // CV type - direct read from CV input (no attenuverter emulation)
             float cv_value = cv_inputs.GetFiltered(param.mapping.GetCVIndex());
-            param.SetNormalizedWithHysteresis(cv_value, 0.001f);
+            param.SetNormalizedWithHysteresis(cv_value, kCVHysteresis);
         } else if (param.type == ParamType::CV && !param.mapping.IsCVSource()) {
             // CV type with no mapping - set to 0
-            param.SetNormalizedWithHysteresis(0.0f, 0.001f);
+            param.SetNormalizedWithHysteresis(0.0f, kCVHysteresis);
         } else if (param.type == ParamType::ENUM && param.mapping.source == MappingSource::CC) {
             // CC control for ENUM - quantized selection from CC value
             float cc_value = cc_values[param.mapping.cc_number];
@@ -215,7 +217,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
                 // Handle CC-mapped KNOB parameters - CC replaces knob value
                 if (child.type == ParamType::KNOB && child.mapping.source == MappingSource::CC) {
                     float cc_value = cc_values[child.mapping.cc_number];
-                    child.SetNormalizedWithHysteresis(cc_value, 0.001f);
+                    child.SetNormalizedWithHysteresis(cc_value, kCVHysteresis);
                 }
                 // Handle CV-mapped KNOB parameters
                 else if (child.type == ParamType::KNOB && child.mapping.IsCVSource()) {
@@ -227,10 +229,10 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
                         float cv_signal = (cv_value - child.mapping.offset) * child.mapping.attenuverter;
                         // Note: In plugged mode, the stored value is the offset, so we use it as center
                         float mapped = child.mapping.offset + cv_signal;
-                        child.SetNormalizedWithHysteresis(std::clamp(mapped, child.min, child.max), 0.001f);
+                        child.SetNormalizedWithHysteresis(std::clamp(mapped, child.min, child.max), kCVHysteresis);
                     } else {
                         // Unplugged mode: CV directly controls the value (0-1)
-                        child.SetNormalizedWithHysteresis(cv_value, 0.001f);
+                        child.SetNormalizedWithHysteresis(cv_value, kCVHysteresis);
                     }
                 }
                 // Handle CC-mapped ENUM parameters
@@ -406,7 +408,7 @@ void UpdateEncoder() {
                         // Show error - no SD card
                         display.RenderMessage("Error", "No SD Card");
                         hw.display.Update();
-                        System::Delay(1500);
+                        System::Delay(kMessageDisplayDelayMs);
                     }
                 } else if (current_param.type == ParamType::LOAD) {
                     // Enter preset load mode
@@ -417,12 +419,12 @@ void UpdateEncoder() {
                         } else {
                             display.RenderMessage("Error", "No presets");
                             hw.display.Update();
-                            System::Delay(1500);
+                            System::Delay(kMessageDisplayDelayMs);
                         }
                     } else {
                         display.RenderMessage("Error", "No SD Card");
                         hw.display.Update();
-                        System::Delay(1500);
+                        System::Delay(kMessageDisplayDelayMs);
                     }
                 } else if (current_param.type == ParamType::SUB) {
                     // Enter SUB's children as new menu
@@ -443,7 +445,7 @@ void UpdateEncoder() {
                     } else {
                         display.RenderMessage("Error", "No SD Card");
                         hw.display.Update();
-                        System::Delay(1500);
+                        System::Delay(kMessageDisplayDelayMs);
                     }
                 }
             } else if (long_press_detected) {
@@ -572,11 +574,11 @@ void UpdateEncoder() {
                             }
                             break;
                         case 3:  // Attenuverter
-                            param.mapping.attenuverter += encoder_increment * 0.05f;
+                            param.mapping.attenuverter += encoder_increment * kEncoderStepMedium;
                             param.mapping.attenuverter = std::clamp(param.mapping.attenuverter, -1.0f, 1.0f);
                             break;
                         case 4:  // Velocity
-                            param.mapping.velocity_amount += encoder_increment * 0.05f;
+                            param.mapping.velocity_amount += encoder_increment * kEncoderStepMedium;
                             param.mapping.velocity_amount = std::clamp(param.mapping.velocity_amount, -1.0f, 1.0f);
                             break;
                     }
@@ -598,7 +600,7 @@ void UpdateEncoder() {
                         // case 2: Plugged - handled on short press, not editable
                         case 3:  // Attenuverter (if CV or CC mapped)
                             if (param.mapping.IsCVSource() || param.mapping.source == MappingSource::CC) {
-                                param.mapping.attenuverter += encoder_increment * 0.05f;
+                                param.mapping.attenuverter += encoder_increment * kEncoderStepMedium;
                                 param.mapping.attenuverter = std::clamp(param.mapping.attenuverter, -1.0f, 1.0f);
                             }
                             break;
@@ -671,7 +673,7 @@ void UpdateEncoder() {
                         display.RenderMessage("Error", "Save failed");
                     }
                     hw.display.Update();
-                    System::Delay(1500);
+                    System::Delay(kMessageDisplayDelayMs);
                 }
                 menu.ExitCharInput();
             }
@@ -730,7 +732,7 @@ void UpdateEncoder() {
                             display.RenderMessage("Error", "Load failed");
                         }
                         hw.display.Update();
-                        System::Delay(1500);
+                        System::Delay(kMessageDisplayDelayMs);
                     }
                 }
                 menu.ExitPresetList();
@@ -793,7 +795,7 @@ void UpdateEncoder() {
                     display.RenderMessage("Error", "Load failed");
                 }
                 hw.display.Update();
-                System::Delay(1500);
+                System::Delay(kMessageDisplayDelayMs);
                 
                 menu.ExitFileBrowser();
             }
