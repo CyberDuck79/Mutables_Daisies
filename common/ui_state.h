@@ -1,44 +1,25 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include "parameter.h"
+#include "state/ui_enums.h"  // Enums extracted to separate file
 
 namespace mutables_ui {
 
-enum class UIState {
-    Navigate,       // Encoder rotation scrolls parameters
-    EditValue,      // Encoder rotation changes value
-    Submenu,        // In submenu (Navigate mode)
-    SubmenuEdit,    // Editing submenu values
-    CharInput,      // Typing preset name for Save
-    PresetList,     // Browsing presets for Load
-    FileBrowser     // Browsing files for USER_DATA selection
-};
-
-// Submenu items for KNOB type (no Back - long press to exit)
-enum class KnobSubmenuItem {
-    Mapping,        // Select source: None, CV1-4, CC
-    CCNumber,       // CC number 1-127 (only if CC mapped)
-    Plugged,        // Toggle + captures offset when enabled (only if CV mapped)
-    Attenuverter,   // -100% to +100%
-    Velocity        // -100% to +100%
-};
-
-// Submenu items for CV type (no Back - long press to exit)
-enum class CVSubmenuItem {
-    Mapping         // Select source: None, CV1-4
-};
-
-// Submenu items for ENUM type (no Back - long press to exit)
-enum class EnumSubmenuItem {
-    Mapping,        // Select source: None, Gate1-2, CV1-4, CC
-    CCNumber,       // CC number 1-127 (only if CC mapped)
-    Attenuverter,   // -100% to +100% (only if CV or CC mapped)
-    Trigger,        // rise, fall, both (only if Gate mapped)
-    Action          // ++, -- (always), +-, -+ (only if trigger=both)
-};
+// Re-export enums and constants for backwards compatibility
+// (they're now defined in state/ui_enums.h)
 
 struct MenuState {
+    // Re-export constants from ui_enums.h for backwards compatibility
+    // (must be declared before use in array size)
+    static constexpr const char* kCharSet = mutables_ui::kCharSet;
+    static constexpr int kCharSetSize = mutables_ui::kCharSetSize;
+    static constexpr int MAX_PRESET_NAME_LEN = mutables_ui::MAX_PRESET_NAME_LEN;
+    static constexpr int VISIBLE_PARAMS = mutables_ui::VISIBLE_PARAMS;
+    static constexpr int VISIBLE_SUBMENU_ITEMS = mutables_ui::VISIBLE_SUBMENU_ITEMS;
+    
+    // Main state
     UIState state;
     int selected_param;
     int param_count;
@@ -55,7 +36,6 @@ struct MenuState {
     int sub_child_selected;       // Selected child in SUB (-1 = title/back selected)
     
     // For preset Save (CharInput state)
-    static constexpr int MAX_PRESET_NAME_LEN = 16;
     char preset_name[MAX_PRESET_NAME_LEN + 1];  // Current name being typed
     int char_position;                          // Current cursor position (0-15)
     int char_index;                             // Index in character set for current position
@@ -71,14 +51,6 @@ struct MenuState {
     int file_scroll_offset;       // Scroll offset for file list
     int file_count;               // Total files found
     int file_browser_param_idx;   // Which USER_DATA parameter we're editing
-    
-    // Character set for name input
-    static constexpr const char* kCharSet = "abcdefghijklmnopqrstuvwxyz0123456789-_. ";
-    static constexpr int kCharSetSize = 40;
-    
-    // Display settings
-    static constexpr int VISIBLE_PARAMS = 4;
-    static constexpr int VISIBLE_SUBMENU_ITEMS = 4;
     
     MenuState() 
         : state(UIState::Navigate)

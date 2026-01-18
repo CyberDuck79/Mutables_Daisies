@@ -45,11 +45,15 @@
 
 **Result:** Single 720-line file → 4 focused files, largest is 256 lines
 
-### 1.3 Split `MenuState` class (649 lines → ~4 files)
-- [ ] `common/ui_state.h` - Base state enum + MenuState shell
-- [ ] `common/navigation_state.h` - Main menu navigation
-- [ ] `common/submenu_state.h` - Submenu/SUB navigation
-- [ ] `common/preset_state.h` - Preset save/load, file browser states
+### 1.3 Extract `MenuState` enums & constants ✅ DONE
+- [x] `common/state/ui_enums.h` - Extracted enums (UIState, KnobSubmenuItem, etc.) + constants (50 lines)
+- [x] `common/state/navigation_state.h` - Reference implementation for navigation (49 lines)
+- [x] `common/state/submenu_state.h` - Reference implementation for submenu/SUB (275 lines)
+- [x] `common/state/preset_state.h` - Reference implementation for preset UI (240 lines)
+- [x] `common/ui_state.h` - Updated to include ui_enums.h, re-exports constants (621 lines)
+
+**Note:** Full struct decomposition deferred - existing code uses direct member access (`menu.selected_param`).
+The component files serve as **reference implementations** for future modular ports.
 
 ---
 
