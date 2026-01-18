@@ -37,11 +37,13 @@
 - `plaits/cv_modulator.h` - Uses kEnvNearZero
 - `common/display.h` - Includes constants.h
 
-### 1.2 Split `Display` class (717 lines → ~4 files)
-- [ ] `common/display.h` - Base Display class with Init/Update only
-- [ ] `common/menu_renderer.h` - Main menu + parameter rendering
-- [ ] `common/submenu_renderer.h` - Submenu/SUB parameter rendering  
-- [ ] `common/preset_ui.h` - Preset list, file browser, char input
+### 1.2 Split `Display` class (720 lines → 4 files) ✅ DONE
+- [x] `common/display.h` - Main Display class with composition (150 lines)
+- [x] `common/renderers/menu_renderer.h` - Main menu + SUB rendering (245 lines)
+- [x] `common/renderers/mapping_submenu_renderer.h` - KNOB/CV/ENUM mapping submenus (256 lines)
+- [x] `common/renderers/preset_renderer.h` - Char input, preset list, file browser (200 lines)
+
+**Result:** Single 720-line file → 4 focused files, largest is 256 lines
 
 ### 1.3 Split `MenuState` class (649 lines → ~4 files)
 - [ ] `common/ui_state.h` - Base state enum + MenuState shell
