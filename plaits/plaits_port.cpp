@@ -2,6 +2,7 @@
 #include "../eurorack/plaits/dsp/voice.h"
 #include "../eurorack/stmlib/utils/buffer_allocator.h"
 #include "../common/constants.h"
+#include "../common/utils/format_utils.h"
 
 namespace mutables_plaits {
 
@@ -182,12 +183,7 @@ static void BipolarPercentFormatCallback(const mutables_ui::Parameter* param,
                                          const mutables_ui::Parameter* siblings, 
                                          uint8_t sibling_count, uint8_t param_index,
                                          char* buffer, size_t buffer_size) {
-    int percent = static_cast<int>(param->value * 100.0f);
-    if (percent >= 0) {
-        snprintf(buffer, buffer_size, "+%d%%", percent);
-    } else {
-        snprintf(buffer, buffer_size, "%d%%", percent);
-    }
+    mutables_ui::format::FormatBipolarPercent(buffer, buffer_size, param->value);
 }
 
 // Format callback for Audio In params (Attack, Release in ms, Holdoff in ms, Threshold in %)
@@ -199,45 +195,19 @@ static void AudioInFormatCallback(const mutables_ui::Parameter* param,
     
     switch (param_index) {
         case AUDIOIN_GAIN:
-            // 1x to 10x (0dB to +20dB) for line level signals
-            {
-                float gain = 1.0f + value * 9.0f;  // 1x to 10x
-                // Calculate dB: 20 * log10(gain), using log10(x) = ln(x) / ln(10)
-                float db = 20.0f * std::log(gain) / kLn10;
-                int db_int = static_cast<int>(db + 0.5f);
-                snprintf(buffer, buffer_size, "+%ddB", db_int);
-            }
+            mutables_ui::format::FormatGainDB(buffer, buffer_size, value);
             break;
             
         case AUDIOIN_ATTACK:
-            // 0.5ms to 200ms log scaled (same as CV out)
-            {
-                float ms = 0.5f * powf(400.0f, value);
-                int ms_int = static_cast<int>(ms * 10.0f + 0.5f);  // tenths of ms
-                if (ms < 10.0f) {
-                    snprintf(buffer, buffer_size, "%d.%dms", ms_int / 10, ms_int % 10);
-                } else {
-                    snprintf(buffer, buffer_size, "%dms", static_cast<int>(ms + 0.5f));
-                }
-            }
+            mutables_ui::format::FormatAttackTime(buffer, buffer_size, value);
             break;
             
         case AUDIOIN_RELEASE:
-            // 5ms to 2000ms log scaled (same as CV out)
-            {
-                float ms = 5.0f * powf(400.0f, value);
-                if (ms < 1000.0f) {
-                    snprintf(buffer, buffer_size, "%dms", static_cast<int>(ms + 0.5f));
-                } else {
-                    int s_int = static_cast<int>(ms / 100.0f + 0.5f);
-                    snprintf(buffer, buffer_size, "%d.%ds", s_int / 10, s_int % 10);
-                }
-            }
+            mutables_ui::format::FormatReleaseTime(buffer, buffer_size, value);
             break;
             
         case AUDIOIN_THRESHOLD:
-            // 0-100% linear
-            snprintf(buffer, buffer_size, "%d%%", static_cast<int>(value * 100.0f + 0.5f));
+            mutables_ui::format::FormatPercent(buffer, buffer_size, value);
             break;
             
         case AUDIOIN_HOLDOFF:
@@ -335,21 +305,12 @@ static void AudioModFormatCallback(const mutables_ui::Parameter* param,
     
     switch (param_index) {
         case AUDIOMOD_GAIN:
-            // 1x to 10x (0dB to +20dB) for line level signals
-            {
-                float gain = 1.0f + value * 9.0f;  // 1x to 10x
-                float db = 20.0f * std::log(gain) / kLn10;
-                int db_int = static_cast<int>(db + 0.5f);
-                snprintf(buffer, buffer_size, "+%ddB", db_int);
-            }
+            mutables_ui::format::FormatGainDB(buffer, buffer_size, value);
             break;
         case AUDIOMOD_LEVEL:
         case AUDIOMOD_TIMBRE:
-            // Show as percentage
-            snprintf(buffer, buffer_size, "%d%%", static_cast<int>(value * 100.0f + 0.5f));
-            break;
         default:
-            snprintf(buffer, buffer_size, "%d%%", static_cast<int>(value * 100.0f + 0.5f));
+            mutables_ui::format::FormatPercent(buffer, buffer_size, value);
             break;
     }
 }
@@ -547,32 +508,11 @@ static void CVOutFormatCallback(const mutables_ui::Parameter* param,
     
     switch (param_index) {
         case CVOUT_ATTACK:
-            // 0.5ms to 200ms log scaled
-            {
-                float ms = 0.5f * powf(400.0f, value);
-                int ms_int = static_cast<int>(ms * 10.0f + 0.5f);  // tenths of ms
-                if (ms < 10.0f) {
-                    // Show one decimal place: X.Xms
-                    snprintf(buffer, buffer_size, "%d.%dms", ms_int / 10, ms_int % 10);
-                } else {
-                    // Show integer ms
-                    snprintf(buffer, buffer_size, "%dms", static_cast<int>(ms + 0.5f));
-                }
-            }
+            mutables_ui::format::FormatAttackTime(buffer, buffer_size, value);
             break;
             
         case CVOUT_RELEASE:
-            // 5ms to 2000ms log scaled
-            {
-                float ms = 5.0f * powf(400.0f, value);
-                if (ms < 1000.0f) {
-                    snprintf(buffer, buffer_size, "%dms", static_cast<int>(ms + 0.5f));
-                } else {
-                    // Show as seconds with one decimal
-                    int s_int = static_cast<int>(ms / 100.0f + 0.5f);  // tenths of seconds
-                    snprintf(buffer, buffer_size, "%d.%ds", s_int / 10, s_int % 10);
-                }
-            }
+            mutables_ui::format::FormatReleaseTime(buffer, buffer_size, value);
             break;
             
         case CVOUT_RATE:
@@ -585,55 +525,26 @@ static void CVOutFormatCallback(const mutables_ui::Parameter* param,
                 snprintf(buffer, buffer_size, "%s", clock_ratio_names[ratio_idx]);
             } else {
                 // Free mode: show Hz (0.1 to 20 Hz log scaled)
-                float hz = 0.1f * powf(200.0f, value);
-                int hz_int = static_cast<int>(hz * 100.0f + 0.5f);  // hundredths of Hz
-                if (hz < 1.0f) {
-                    // Show two decimals: 0.XXHz
-                    snprintf(buffer, buffer_size, "0.%02dHz", hz_int);
-                } else if (hz < 10.0f) {
-                    // Show one decimal: X.XHz
-                    int hz_tenths = static_cast<int>(hz * 10.0f + 0.5f);
-                    snprintf(buffer, buffer_size, "%d.%dHz", hz_tenths / 10, hz_tenths % 10);
-                } else {
-                    // Show integer Hz
-                    snprintf(buffer, buffer_size, "%dHz", static_cast<int>(hz + 0.5f));
-                }
+                mutables_ui::format::FormatLFORate(buffer, buffer_size, value);
             }
             break;
             
         case CVOUT_AMP:
-            // Percentage 0-100%
-            snprintf(buffer, buffer_size, "%d%%", static_cast<int>(value * 100.0f + 0.5f));
+        case CVOUT_SLEW:
+            mutables_ui::format::FormatPercent(buffer, buffer_size, value);
             break;
             
         case CVOUT_PHASE:
-            // Degrees 0-360
-            snprintf(buffer, buffer_size, "%ddeg", static_cast<int>(value * 360.0f + 0.5f));
-            break;
-            
-        case CVOUT_SLEW:
-            // Slew amount as percentage (0% = instant, 100% = very slow)
-            snprintf(buffer, buffer_size, "%d%%", static_cast<int>(value * 100.0f + 0.5f));
+            mutables_ui::format::FormatDegrees(buffer, buffer_size, value);
             break;
             
         case CVOUT_SCALE3:
         case CVOUT_SCALE4:
-            // Scale 0.0x to 2.0x
-            {
-                float scale = value * 2.0f;
-                int scale_int = static_cast<int>(scale * 10.0f + 0.5f);
-                snprintf(buffer, buffer_size, "%d.%dx", scale_int / 10, scale_int % 10);
-            }
+            mutables_ui::format::FormatMultiplier(buffer, buffer_size, value);
             break;
             
         default:
-            // Default: show as 0.00
-            {
-                int val_int = static_cast<int>(value * 100.0f);
-                int whole = val_int / 100;
-                int frac = val_int % 100;
-                snprintf(buffer, buffer_size, "%d.%02d", whole, frac);
-            }
+            mutables_ui::format::FormatDecimal(buffer, buffer_size, value);
             break;
     }
 }
