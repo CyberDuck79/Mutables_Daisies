@@ -1,0 +1,2 @@
+- screen saver ?
+- auto load preset named "default" ?

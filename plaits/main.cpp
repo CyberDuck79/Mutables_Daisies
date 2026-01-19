@@ -893,11 +893,12 @@ int main(void) {
     logger.StartLog(false);  // Don't wait for PC
     logger.PrintLine("Plaits starting...");
     
-    // Initialize SD card - using polling mode in sd_diskio.c (DMA callbacks broken)
+    // Initialize SD card
+    // Using official libDaisy initialization sequence with DMA
+    // Buffer alignment handled in UserDataManager with DMA_BUFFER_MEM_SECTION
     {
         SdmmcHandler::Config sd_cfg;
-        sd_cfg.Defaults();
-        sd_cfg.speed = SdmmcHandler::Speed::SLOW;  // Use SLOW for reliable polling mode
+        sd_cfg.Defaults();  // FAST speed (50MHz), 4-bit width
         sdmmc.Init(sd_cfg);
         
         fsi.Init(FatFSInterface::Config::MEDIA_SD);
@@ -954,6 +955,9 @@ int main(void) {
     
     display.RenderBootScreen("Plaitsy");
     System::Delay(3000);
+    
+    // Enable CPU logging now that init is complete
+    cpu_monitor.EnableLogging(true);
     
     hw.StartAdc();
     hw.StartAudio(AudioCallback);

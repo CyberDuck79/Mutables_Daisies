@@ -3,6 +3,7 @@
 #include "daisy_patch.h"
 #include "fatfs.h"
 #include "../eurorack/plaits/user_data.h"
+#include "../common/sd_dma_buffer.h"  // Shared DMA buffer for SD operations
 #include <cstring>
 #include <cstdint>
 
@@ -33,6 +34,9 @@ namespace mutables_plaits {
  *   /plaits/user_data/six_op_bank_3/default.bin
  *   /plaits/user_data/wavetable/default.bin
  *   /plaits/user_data/wave_terrain/default.bin
+ * 
+ * IMPORTANT: SD card DMA requires buffers in AXI SRAM (not DTCMRAM).
+ * Uses the shared DMA buffer from sd_dma_buffer.h.
  */
 class UserDataManager : public plaits::UserDataProvider {
 public:
@@ -132,6 +136,8 @@ public:
      * @param target The target to load
      * @param filename The filename (within the target's directory)
      * @return true if loaded successfully
+     * 
+     * Uses DMA-compatible buffer for SD card reads, then copies to final storage.
      */
     bool LoadTarget(Target target, const char* filename) {
         if (!initialized_ || !fsi_ || target >= NUM_TARGETS) {
@@ -164,9 +170,10 @@ public:
             return false;
         }
         
-        // Read data
+        // Read data using shared DMA-compatible buffer (in AXI SRAM)
+        auto& dma_buffer = sd_utils::GetSharedDmaBuffer();
         UINT bytes_read;
-        fr = f_read(&file, data_[target], DATA_SIZE, &bytes_read);
+        fr = f_read(&file, dma_buffer.data, DATA_SIZE, &bytes_read);
         f_close(&file);
         
         if (fr != FR_OK || bytes_read != DATA_SIZE) {
@@ -176,6 +183,9 @@ public:
             loaded_[target] = false;
             return false;
         }
+        
+        // Copy from DMA buffer to final storage
+        memcpy(data_[target], dma_buffer.data, DATA_SIZE);
         
         // Mark as loaded and store filename
         loaded_[target] = true;
@@ -349,7 +359,7 @@ private:
     // Base path for user data
     char base_path_[64];
     
-    // Data buffers for each target
+    // Data buffers for each target (final storage, can be in any RAM)
     uint8_t data_[NUM_TARGETS][DATA_SIZE];
     
     // Loaded state for each target

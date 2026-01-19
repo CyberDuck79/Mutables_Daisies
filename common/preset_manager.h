@@ -3,6 +3,7 @@
 #include "daisy_patch.h"
 #include "fatfs.h"
 #include "parameter.h"
+#include "sd_dma_buffer.h"  // Shared DMA buffer for SD operations
 #include <cstring>
 #include <cstdint>
 
@@ -51,6 +52,9 @@ struct PresetHeader {
 struct PresetEntry {
     char name[MAX_PRESET_NAME + 1];
 };
+
+// Size needed for preset data
+static constexpr size_t PRESET_BUFFER_SIZE = sizeof(PresetHeader) + MAX_PARAMS * sizeof(ParameterData);
 
 class PresetManager {
 public:
@@ -158,8 +162,9 @@ public:
         size_t actual_count = (total_params > MAX_PARAMS) ? MAX_PARAMS : total_params;
         size_t total_size = sizeof(PresetHeader) + actual_count * sizeof(ParameterData);
         
-        // Use a static buffer in DMA-safe memory
-        static uint8_t DMA_BUFFER_MEM_SECTION write_buffer[sizeof(PresetHeader) + MAX_PARAMS * sizeof(ParameterData)];
+        // Use the shared DMA buffer for writing (in AXI SRAM for SDMMC DMA)
+        auto& dma_buffer = sd_utils::GetSharedDmaBuffer();
+        uint8_t* write_buffer = dma_buffer.data;
         
         // Fill header at start of buffer
         PresetHeader* header = reinterpret_cast<PresetHeader*>(write_buffer);
@@ -230,6 +235,7 @@ public:
     }
     
     // Load parameters from a preset file
+    // Uses DMA-compatible buffer for SD card reads to ensure proper memory alignment
     bool LoadPreset(const char* preset_name, Parameter* params, size_t param_count) {
         if (g_logger) g_logger->PrintLine("Load: Starting for '%s'", preset_name);
         
@@ -252,6 +258,16 @@ public:
         }
         if (g_logger) g_logger->PrintLine("Load: File size=%lu bytes", fno.fsize);
         
+        // Ensure file fits in our shared buffer
+        if (fno.fsize > sd_utils::DMA_BUFFER_SIZE) {
+            if (g_logger) g_logger->PrintLine("Load: File too large");
+            return false;
+        }
+        
+        // Get the shared DMA buffer for reading
+        // This is CRITICAL: SD card DMA requires buffers in AXI SRAM
+        auto& dma_buffer = sd_utils::GetSharedDmaBuffer();
+        
         // Open file for reading
         FIL file;
         fr = f_open(&file, filepath, FA_READ);
@@ -262,54 +278,54 @@ public:
         if (g_logger) g_logger->PrintLine("Load: File opened, fptr=%lu, fsize=%lu", 
                                           (unsigned long)f_tell(&file), (unsigned long)f_size(&file));
         
-        // Read header
-        PresetHeader header;
+        // Read entire file into DMA buffer in one operation
         UINT bytes_read;
-        fr = f_read(&file, &header, sizeof(PresetHeader), &bytes_read);
-        if (fr != FR_OK || bytes_read != sizeof(PresetHeader)) {
-            if (g_logger) g_logger->PrintLine("Load: Header read failed, fr=%d, bytes=%u", (int)fr, bytes_read);
-            f_close(&file);
+        fr = f_read(&file, dma_buffer.data, fno.fsize, &bytes_read);
+        f_close(&file);
+        
+        if (fr != FR_OK || bytes_read != fno.fsize) {
+            if (g_logger) g_logger->PrintLine("Load: Read failed, fr=%d, bytes=%u", (int)fr, bytes_read);
             return false;
         }
+        if (g_logger) g_logger->PrintLine("Load: Read %u bytes into DMA buffer", bytes_read);
+        
+        // Parse header from buffer
+        const PresetHeader* header = reinterpret_cast<const PresetHeader*>(dma_buffer.data);
         if (g_logger) g_logger->PrintLine("Load: Header - magic=0x%08X, version=%u, params=%u, checksum=0x%08X", 
-                                          header.magic, header.version, header.param_count, header.checksum);
+                                          header->magic, header->version, header->param_count, header->checksum);
         
         // Validate header
-        if (header.magic != PRESET_MAGIC) {
+        if (header->magic != PRESET_MAGIC) {
             if (g_logger) g_logger->PrintLine("Load: Bad magic (expected 0x%08X)", PRESET_MAGIC);
-            f_close(&file);
             return false;
         }
         
         // Version check (allow loading older versions)
-        if (header.version > PRESET_VERSION) {
+        if (header->version > PRESET_VERSION) {
             if (g_logger) g_logger->PrintLine("Load: Version too new");
-            f_close(&file);
             return false;
         }
         
         // Determine ParameterData size based on version
         // Version 1: 24 bytes (no user_data_filename)
         // Version 2: 56 bytes (with user_data_filename)
-        size_t param_data_size = (header.version >= 2) ? sizeof(ParameterData) : 24;
-        bool has_user_data_filename = (header.version >= 2);
+        size_t param_data_size = (header->version >= 2) ? sizeof(ParameterData) : 24;
+        bool has_user_data_filename = (header->version >= 2);
         
-        // Read parameters (need to match the order we saved)
+        // Read parameters from buffer (need to match the order we saved)
         // We iterate through params, and when we hit a SUB, read its children too
         uint32_t checksum = 0;
         size_t file_idx = 0;  // Index in file's param data
+        const uint8_t* param_ptr = dma_buffer.data + sizeof(PresetHeader);
         
         if (g_logger) g_logger->PrintLine("Load: Reading params (file has %u, version %u)", 
-                                          header.param_count, header.version);
+                                          header->param_count, header->version);
         
-        for (size_t i = 0; i < param_count && file_idx < header.param_count; i++) {
+        for (size_t i = 0; i < param_count && file_idx < header->param_count; i++) {
+            // Copy parameter data from buffer
             ParameterData pd = {};  // Zero initialize for v1 compatibility
-            fr = f_read(&file, &pd, param_data_size, &bytes_read);
-            if (fr != FR_OK || bytes_read != param_data_size) {
-                if (g_logger) g_logger->PrintLine("Load: Param %u read failed", (unsigned)i);
-                f_close(&file);
-                return false;
-            }
+            memcpy(&pd, param_ptr, param_data_size);
+            param_ptr += param_data_size;
             
             // Add to checksum verification (only for bytes actually read)
             const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&pd);
@@ -322,15 +338,11 @@ public:
             file_idx++;
             
             // If SUB, also read children (version 2+ only has SUB with children)
-            if (params[i].type == ParamType::SUB && params[i].children && header.version >= 2) {
-                for (size_t c = 0; c < params[i].child_count && file_idx < header.param_count; c++) {
+            if (params[i].type == ParamType::SUB && params[i].children && header->version >= 2) {
+                for (size_t c = 0; c < params[i].child_count && file_idx < header->param_count; c++) {
                     pd = {};  // Reset for next read
-                    fr = f_read(&file, &pd, param_data_size, &bytes_read);
-                    if (fr != FR_OK || bytes_read != param_data_size) {
-                        if (g_logger) g_logger->PrintLine("Load: SUB child %u read failed", (unsigned)c);
-                        f_close(&file);
-                        return false;
-                    }
+                    memcpy(&pd, param_ptr, param_data_size);
+                    param_ptr += param_data_size;
                     
                     bytes = reinterpret_cast<const uint8_t*>(&pd);
                     for (size_t j = 0; j < param_data_size; j++) {
@@ -342,12 +354,13 @@ public:
                 }
             }
         }
-        if (g_logger) g_logger->PrintLine("Load: Computed checksum=0x%08X (expected=0x%08X)", checksum, header.checksum);
+        if (g_logger) g_logger->PrintLine("Load: Computed checksum=0x%08X (expected=0x%08X)", checksum, header->checksum);
         
         // Skip any extra parameters in file (newer preset with more params)
-        while (file_idx < header.param_count) {
+        while (file_idx < header->param_count) {
             ParameterData pd;
-            f_read(&file, &pd, param_data_size, &bytes_read);
+            memcpy(&pd, param_ptr, param_data_size);
+            param_ptr += param_data_size;
             const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&pd);
             for (size_t j = 0; j < param_data_size; j++) {
                 checksum += bytes[j];
@@ -355,11 +368,8 @@ public:
             file_idx++;
         }
         
-        f_close(&file);
-        if (g_logger) g_logger->PrintLine("Load: File closed");
-        
         // Verify checksum
-        if (checksum != header.checksum) {
+        if (checksum != header->checksum) {
             if (g_logger) g_logger->PrintLine("Load: CHECKSUM MISMATCH!");
             return false;
         }

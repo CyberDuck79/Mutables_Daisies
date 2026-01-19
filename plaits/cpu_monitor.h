@@ -54,6 +54,7 @@ public:
         , sample_rate_(0)
         , block_size_(0)
         , initialized_(false)
+        , log_enabled_(false)
         , recent_max_(0.0f) {}
 
     /**
@@ -165,6 +166,14 @@ public:
     }
 
     /**
+     * Enable or disable CPU logging
+     * Call with true after init is complete to start logging
+     */
+    void EnableLogging(bool enable) {
+        log_enabled_ = enable;
+    }
+
+    /**
      * Update and optionally log CPU usage
      * Call this in the main loop (not in AudioCallback)
      * @param current_time_ms Current time in milliseconds
@@ -177,8 +186,8 @@ public:
 
 #ifndef RELEASE
 #ifdef DEBUG_LOGGING
-        // Only log periodically
-        if (logger && (current_time_ms - last_log_time_ >= kCpuLogIntervalMs)) {
+        // Only log periodically, and only if logging is enabled
+        if (log_enabled_ && logger && (current_time_ms - last_log_time_ >= kCpuLogIntervalMs)) {
             last_log_time_ = current_time_ms;
             
             // Use integer math - no float formatting on this platform!
@@ -238,6 +247,7 @@ private:
     float sample_rate_;
     int block_size_;
     bool initialized_;
+    bool log_enabled_;
     float recent_max_;  // Decaying max for better responsiveness
 };
 
