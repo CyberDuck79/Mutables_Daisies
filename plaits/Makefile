@@ -75,6 +75,21 @@ C_INCLUDES += \
 # Define PLAITS_DAISY for platform-specific code in eurorack libraries
 C_DEFS += -DPLAITS_DAISY
 
+# Build configuration flags:
+#   make                    -> Debug build with logging enabled
+#   make DEBUG_LOGGING=1    -> Same as above (explicit)
+#   make RELEASE=1          -> Release build with logging disabled
+#   
+# CPU monitoring is always active (for UI alert), only logging is conditional
+
+ifdef RELEASE
+    # Release build: disable all debug logging
+    C_DEFS += -DRELEASE
+else
+    # Debug build: enable CPU logging and debug output
+    C_DEFS += -DDEBUG_LOGGING
+endif
+
 # Compiler flags for Plaits
 CPP_STANDARD = -std=gnu++17
 OPT = -O2

@@ -4,6 +4,7 @@
 #include "user_data_manager.h"
 #include "logo_bitmap.h"
 #include "encoder_handlers.h"
+#include "cpu_monitor.h"
 #include "../common/parameter.h"
 #include "../common/ui_state.h"
 #include "../common/cv_input.h"
@@ -33,6 +34,9 @@ SdmmcHandler sdmmc;
 FatFSInterface fsi;
 PresetManager preset_manager;
 UserDataManager user_data_manager;
+
+// CPU Monitor
+mutables::CpuMonitor cpu_monitor;
 
 // Debug logger
 daisy::Logger<daisy::LOGGER_INTERNAL> logger;
@@ -119,6 +123,9 @@ int CalculateEnumFromCV(const mutables_ui::Parameter& param, const CVInputBank& 
 }
 
 void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size) {
+    // Start CPU measurement
+    cpu_monitor.OnBlockStart();
+    
     // Update CV inputs with raw ADC values (no pot scaling or processing)
     // This preserves precision for V/Oct and accurate offset capture
     // Invert values since ADC reads are inverted on Daisy Patch (0V = 1.0, 5V = 0.0)
@@ -307,6 +314,9 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     
     // Write Gate Output
     hw.gate_output.Write(plaits_module.GetGateOutput());
+    
+    // End CPU measurement
+    cpu_monitor.OnBlockEnd();
 }
 
 // Forward declaration for AudioCallback restart
@@ -845,6 +855,9 @@ const char* GetPresetNameCallback(int index) {
 void UpdateDisplay() {
     auto params = plaits_module.GetParameters();
     
+    // Update CPU overload status for display alert
+    display.SetCpuOverload(cpu_monitor.IsOverloaded());
+    
     if (menu.state == UIState::CharInput) {
         display.RenderCharInput(menu);
     } else if (menu.state == UIState::PresetList) {
@@ -900,6 +913,9 @@ int main(void) {
     
     plaits_module.Init(48000.0f);
     
+    // Initialize CPU monitor
+    cpu_monitor.Init(48000.0f, hw.AudioBlockSize());
+    
     // Initialize preset manager
     preset_manager.Init(sdmmc, fsi, plaits_module.GetShortName());
     logger.PrintLine("Preset manager initialized");
@@ -952,6 +968,10 @@ int main(void) {
         UpdateEncoder();
         
         uint32_t now = System::GetNow();
+        
+        // Periodic CPU logging (every 2 seconds in debug builds)
+        cpu_monitor.Update(now, g_logger);
+        
         if (now - last_display_update >= 16) {
             last_display_update = now;
             UpdateDisplay();

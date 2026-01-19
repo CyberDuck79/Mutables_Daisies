@@ -23,11 +23,16 @@ using LogoDrawFunc = void (*)(daisy::OledDisplay<daisy::SSD130x4WireSpi128x64Dri
 
 class Display {
 public:
-    Display() : hw_(nullptr), logo_draw_func_(nullptr) {}
+    Display() : hw_(nullptr), logo_draw_func_(nullptr), cpu_overload_(false) {}
     
     void Init(daisy::DaisyPatch* hw, LogoDrawFunc logo_func = nullptr) {
         hw_ = hw;
         logo_draw_func_ = logo_func;
+    }
+    
+    // Set CPU overload flag (call from main loop with CpuMonitor::IsOverloaded())
+    void SetCpuOverload(bool overloaded) {
+        cpu_overload_ = overloaded;
     }
     
     //=========================================================================
@@ -83,12 +88,22 @@ public:
         if (!hw_) return;
         MenuRenderer<decltype(hw_->display)> renderer(hw_->display);
         renderer.RenderMenu(menu, params);
+        
+        // Draw CPU overload indicator if needed
+        if (cpu_overload_) {
+            DrawCpuOverloadIndicator();
+        }
     }
     
     void RenderSubMenu(const MenuState& menu, Parameter* parent) {
         if (!hw_) return;
         MenuRenderer<decltype(hw_->display)> renderer(hw_->display);
         renderer.RenderSubMenu(menu, parent);
+        
+        // Draw CPU overload indicator if needed
+        if (cpu_overload_) {
+            DrawCpuOverloadIndicator();
+        }
     }
     
     //=========================================================================
@@ -145,6 +160,31 @@ public:
 private:
     daisy::DaisyPatch* hw_;
     LogoDrawFunc logo_draw_func_;
+    bool cpu_overload_;
+    
+    // Draw CPU overload indicator (flashing "!" in top-right corner)
+    void DrawCpuOverloadIndicator() {
+        if (!hw_) return;
+        
+        // Flash at ~2Hz using system time
+        uint32_t now = daisy::System::GetNow();
+        if ((now / 250) % 2 == 0) {
+            // Draw inverted "!" indicator in top-right corner
+            // Position: x=120-127, y=0-9 (small corner)
+            const int x = 121;
+            const int y = 0;
+            
+            // Draw black background
+            hw_->display.DrawRect(x - 1, y, 127, 9, true, true);
+            
+            // Draw "!" in inverse video
+            hw_->display.SetCursor(x, y + 1);
+            hw_->display.WriteString("!", Font_6x8, false);
+        }
+        
+        // Note: We need to call Update() again since the menu already did
+        hw_->display.Update();
+    }
 };
 
 } // namespace mutables_ui
