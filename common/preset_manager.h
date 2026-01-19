@@ -4,7 +4,6 @@
 #include "fatfs.h"
 #include "parameter.h"
 #include "sd_dma_buffer.h"  // Shared DMA buffer for SD operations
-#include "util/bsp_sd_diskio.h"  // For SD_GetLastErrorCode
 #include <cstring>
 #include <cstdint>
 
@@ -203,28 +202,21 @@ public:
         header->checksum = checksum;
         
         // Open file for writing (using class member file_ which is aligned for DMA)
-        if (g_logger) g_logger->PrintLine("Save: Opening file...");
         FRESULT fr = f_open(&file_, filepath, FA_CREATE_ALWAYS | FA_WRITE);
         if (fr != FR_OK) {
-            if (g_logger) g_logger->PrintLine("Save: Open failed: %d, SD err: 0x%08lX", (int)fr, SD_GetLastErrorCode());
             return false;
         }
         
         // Write everything in one call (like official example)
         UINT bytes_written;
-        if (g_logger) g_logger->PrintLine("Save: Writing %d bytes...", (int)total_size);
         fr = f_write(&file_, write_buffer, total_size, &bytes_written);
         if (fr != FR_OK || bytes_written != total_size) {
-            if (g_logger) g_logger->PrintLine("Save: Write failed, fr=%d, written=%u", (int)fr, bytes_written);
             f_close(&file_);
             return false;
         }
-        if (g_logger) g_logger->PrintLine("Save: Write done (%u bytes)", bytes_written);
         
         // Close file
-        if (g_logger) g_logger->PrintLine("Save: Closing...");
         fr = f_close(&file_);
-        if (g_logger) g_logger->PrintLine("Save: Close result fr=%d", (int)fr);
         
         // Verify file was created
         FILINFO fno;
