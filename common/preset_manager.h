@@ -4,6 +4,7 @@
 #include "fatfs.h"
 #include "parameter.h"
 #include "sd_dma_buffer.h"  // Shared DMA buffer for SD operations
+#include "util/bsp_sd_diskio.h"  // For SD_GetLastErrorCode
 #include <cstring>
 #include <cstdint>
 
@@ -201,29 +202,28 @@ public:
         }
         header->checksum = checksum;
         
-        // Open file for writing
-        FIL file;
+        // Open file for writing (using class member file_ which is aligned for DMA)
         if (g_logger) g_logger->PrintLine("Save: Opening file...");
-        FRESULT fr = f_open(&file, filepath, FA_CREATE_ALWAYS | FA_WRITE);
+        FRESULT fr = f_open(&file_, filepath, FA_CREATE_ALWAYS | FA_WRITE);
         if (fr != FR_OK) {
-            if (g_logger) g_logger->PrintLine("Save: Open failed: %d", (int)fr);
+            if (g_logger) g_logger->PrintLine("Save: Open failed: %d, SD err: 0x%08lX", (int)fr, SD_GetLastErrorCode());
             return false;
         }
         
         // Write everything in one call (like official example)
         UINT bytes_written;
         if (g_logger) g_logger->PrintLine("Save: Writing %d bytes...", (int)total_size);
-        fr = f_write(&file, write_buffer, total_size, &bytes_written);
+        fr = f_write(&file_, write_buffer, total_size, &bytes_written);
         if (fr != FR_OK || bytes_written != total_size) {
             if (g_logger) g_logger->PrintLine("Save: Write failed, fr=%d, written=%u", (int)fr, bytes_written);
-            f_close(&file);
+            f_close(&file_);
             return false;
         }
         if (g_logger) g_logger->PrintLine("Save: Write done (%u bytes)", bytes_written);
         
         // Close file
         if (g_logger) g_logger->PrintLine("Save: Closing...");
-        fr = f_close(&file);
+        fr = f_close(&file_);
         if (g_logger) g_logger->PrintLine("Save: Close result fr=%d", (int)fr);
         
         // Verify file was created
@@ -268,20 +268,19 @@ public:
         // This is CRITICAL: SD card DMA requires buffers in AXI SRAM
         auto& dma_buffer = sd_utils::GetSharedDmaBuffer();
         
-        // Open file for reading
-        FIL file;
-        fr = f_open(&file, filepath, FA_READ);
+        // Open file for reading (using class member file_ which is aligned for DMA)
+        fr = f_open(&file_, filepath, FA_READ);
         if (fr != FR_OK) {
             if (g_logger) g_logger->PrintLine("Load: Open failed, fr=%d", (int)fr);
             return false;
         }
         if (g_logger) g_logger->PrintLine("Load: File opened, fptr=%lu, fsize=%lu", 
-                                          (unsigned long)f_tell(&file), (unsigned long)f_size(&file));
+                                          (unsigned long)f_tell(&file_), (unsigned long)f_size(&file_));
         
         // Read entire file into DMA buffer in one operation
         UINT bytes_read;
-        fr = f_read(&file, dma_buffer.data, fno.fsize, &bytes_read);
-        f_close(&file);
+        fr = f_read(&file_, dma_buffer.data, fno.fsize, &bytes_read);
+        f_close(&file_);
         
         if (fr != FR_OK || bytes_read != fno.fsize) {
             if (g_logger) g_logger->PrintLine("Load: Read failed, fr=%d, bytes=%u", (int)fr, bytes_read);
@@ -446,6 +445,11 @@ private:
     // Preset list cache
     PresetEntry presets_[MAX_PRESETS];
     int preset_count_;
+    
+    // Static aligned FIL for file operations
+    // FIL has a 512-byte buffer that gets used for DMA during f_close
+    // Must be 32-byte aligned and in AXI SRAM (not stack/DTCMRAM)
+    alignas(32) FIL file_;
     
     // Create directory structure if needed
     void EnsureDirectoryExists() {
