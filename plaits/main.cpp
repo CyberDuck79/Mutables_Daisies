@@ -924,8 +924,7 @@ int main(void) {
     // Initialize user data manager and load defaults from SD card
     user_data_manager.Init(fsi, plaits_module.GetShortName());
     user_data_manager.CreateDirectories();  // Create dirs if they don't exist
-    int loaded = user_data_manager.LoadDefaults();
-    logger.PrintLine("User data: %d targets loaded", loaded);
+    user_data_manager.LoadDefaults();  // Logs internally
     
     // Sync user_data_params_ filenames with what was loaded
     // Find the User Data SUB param and update each child's filename

@@ -124,7 +124,7 @@ public:
         if (LoadTarget(TARGET_WAVETABLE, "default.bin")) loaded_count++;
         
         if (g_logger) {
-            g_logger->PrintLine("UserData: %d/%d from SD (rest use firmware defaults)", 
+            g_logger->PrintLine("UserData: %d/%d from SD", 
                                loaded_count, (int)NUM_TARGETS);
         }
         
