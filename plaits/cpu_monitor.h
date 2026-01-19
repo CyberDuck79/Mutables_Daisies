@@ -8,7 +8,8 @@
 // Features:
 // - Wraps daisy::CpuLoadMeter for audio callback timing
 // - Periodic logging (controlled by DEBUG_LOGGING flag)
-// - UI alert threshold (default 95%)
+// - UI alert threshold based on recent max (not all-time max)
+// - Decaying max that gradually returns to current levels
 // - Conditional compilation for release builds
 //
 // Usage:
@@ -31,14 +32,18 @@
 
 namespace mutables {
 
-// Default alert threshold (95% CPU usage)
-constexpr float kCpuAlertThreshold = 0.95f;
+// Default alert threshold (80% CPU usage - lower for early warning before audio glitches)
+constexpr float kCpuAlertThreshold = 0.80f;
 
 // Logging interval in milliseconds
 constexpr uint32_t kCpuLogIntervalMs = 2000;
 
 // Smoothing filter cutoff for average calculation (Hz)
 constexpr float kCpuSmoothingHz = 0.5f;
+
+// Decay rate for recent max (per block, lower = slower decay)
+// At 2000 blocks/sec (48kHz/24), 0.9995 gives ~1 sec to decay by 63%
+constexpr float kRecentMaxDecay = 0.9995f;
 
 class CpuMonitor {
 public:
@@ -48,7 +53,8 @@ public:
         , last_log_time_(0)
         , sample_rate_(0)
         , block_size_(0)
-        , initialized_(false) {}
+        , initialized_(false)
+        , recent_max_(0.0f) {}
 
     /**
      * Initialize the CPU monitor
@@ -60,6 +66,7 @@ public:
         block_size_ = block_size;
         meter_.Init(sample_rate, block_size, kCpuSmoothingHz);
         last_log_time_ = 0;
+        recent_max_ = 0.0f;
         initialized_ = true;
     }
 
@@ -80,9 +87,17 @@ public:
     inline void OnBlockEnd() {
         if (initialized_) {
             meter_.OnBlockEnd();
-            // Check for overload condition
+            
+            // Update recent max with decay
+            // This captures spikes but gradually returns to current level
             float current = meter_.GetAvgCpuLoad();
-            overloaded_ = (current >= alert_threshold_);
+            recent_max_ = recent_max_ * kRecentMaxDecay;
+            if (current > recent_max_) {
+                recent_max_ = current;
+            }
+            
+            // Check for overload based on recent max (more responsive than average)
+            overloaded_ = (recent_max_ >= alert_threshold_);
         }
     }
 
@@ -95,6 +110,7 @@ public:
 
     /**
      * Get maximum CPU load since last reset (0.0 to 1.0)
+     * Note: This is the all-time max, use GetRecentMax() for display
      */
     float GetMaxLoad() const { 
         return initialized_ ? meter_.GetMaxCpuLoad() : 0.0f; 
@@ -108,8 +124,16 @@ public:
     }
 
     /**
+     * Get recent maximum CPU load (decaying) (0.0 to 1.0)
+     * This is more useful than all-time max for monitoring ongoing performance
+     */
+    float GetRecentMax() const {
+        return recent_max_;
+    }
+
+    /**
      * Check if CPU usage is above alert threshold
-     * @return true if current average load >= threshold
+     * @return true if recent max load >= threshold
      */
     bool IsOverloaded() const { 
         return overloaded_; 
@@ -117,7 +141,7 @@ public:
 
     /**
      * Set alert threshold (0.0 to 1.0)
-     * Default is 0.95 (95%)
+     * Default is 0.80 (80%)
      */
     void SetAlertThreshold(float threshold) {
         alert_threshold_ = std::clamp(threshold, 0.0f, 1.0f);
@@ -136,6 +160,7 @@ public:
     void Reset() {
         if (initialized_) {
             meter_.Reset();
+            recent_max_ = 0.0f;
         }
     }
 
@@ -156,13 +181,17 @@ public:
         if (logger && (current_time_ms - last_log_time_ >= kCpuLogIntervalMs)) {
             last_log_time_ = current_time_ms;
             
-            float avg = GetAvgLoad() * 100.0f;
-            float max = GetMaxLoad() * 100.0f;
-            float min = GetMinLoad() * 100.0f;
+            // Use integer math - no float formatting on this platform!
+            int avg = static_cast<int>(GetAvgLoad() * 100.0f);
+            int recent = static_cast<int>(GetRecentMax() * 100.0f);
+            int period_max = static_cast<int>(GetMaxLoad() * 100.0f);
             
-            logger->PrintLine("CPU: %.1f%% avg, %.1f%% max, %.1f%% min%s",
-                avg, max, min,
+            logger->PrintLine("CPU: %d%% avg, %d%% recent, %d%% peak%s",
+                avg, recent, period_max,
                 overloaded_ ? " [OVERLOAD]" : "");
+            
+            // Reset meter's min/max for next period (but keep our decaying recent_max_)
+            meter_.Reset();
             
             return true;
         }
@@ -187,7 +216,8 @@ public:
             return buf;
         }
         
-        int pct = static_cast<int>(GetAvgLoad() * 100.0f + 0.5f);
+        // Use recent max for display (more representative of actual load)
+        int pct = static_cast<int>(GetRecentMax() * 100.0f + 0.5f);
         if (pct > 99) pct = 99;
         if (pct < 0) pct = 0;
         
@@ -208,6 +238,7 @@ private:
     float sample_rate_;
     int block_size_;
     bool initialized_;
+    float recent_max_;  // Decaying max for better responsiveness
 };
 
 } // namespace mutables

@@ -4,6 +4,7 @@
 #include "../common/parameter.h"
 #include "cv_modulator.h"
 #include "audio_processors.h"
+#include "polyphonic_voice.h"
 #include "../DaisySP/Source/Filters/ladder.h"
 #include <array>
 
@@ -47,11 +48,25 @@ public:
     void ReloadUserData();
     
 private:
-    // Plaits engine
+    // Buffer size constants (must be declared first for array sizes)
+    static constexpr size_t kBlockSize = 24;
+    static constexpr size_t kBufferSize = 32768;  // Buffer for Plaits engines
+    static constexpr int kMaxPolyVoices = 4;
+    
+    // Plaits engine - primary voice (voice 0)
     plaits::Voice* voice_;
     plaits::Patch* patch_;
     plaits::Modulations* modulations_;
     stmlib::BufferAllocator* allocator_;
+    uint8_t buffer_[kBufferSize];
+    
+    // Polyphony support (additional voices 1-3)
+    plaits::Voice* poly_voices_[kMaxPolyVoices - 1];
+    stmlib::BufferAllocator* poly_allocators_[kMaxPolyVoices - 1];
+    uint8_t poly_buffers_[kMaxPolyVoices - 1][kBufferSize];
+    PolyphonicVoiceManager voice_manager_;
+    PolyphonicMixer mixer_;
+    int voice_count_;  // 1-4 voices
     
     // CV modulation values from mapped inputs
     float frequency_cv_;
@@ -60,11 +75,6 @@ private:
     
     // Raw CV input values for S&H source
     float cv_inputs_[4];
-    
-    // Buffers
-    static constexpr size_t kBlockSize = 24;
-    static constexpr size_t kBufferSize = 32768;  // Buffer for Plaits engines
-    uint8_t buffer_[kBufferSize];
     
     // Parameters
     static constexpr int kNumParams = 21;  // Bank, Engine, Frequency, Harmonics, Timbre, Morph, Level, V/Oct, Filter (SUB), Volume, Settings (SUB), CV Out 1 (SUB), CV Out 2 (SUB), Gate Out (SUB), Audio In 1 (SUB), Audio In 2 (SUB), Audio In 3 (SUB), Audio In 4 (SUB), User Data (SUB), Save, Load
@@ -75,7 +85,7 @@ private:
     static constexpr int kNumAudioIn1Params = 4;  // Mode, Gain, Level, Timbre (Stage 1: IN1, 7 algorithms)
     static constexpr int kNumAudioIn2Params = 4;  // Mode, Gain, Level, Timbre (Stage 2: IN2, 8 algorithms with Vocoder)
     static constexpr int kNumFilterParams = 5;  // Mode, Freq, Reso, Drive, Track (Moog ladder filter)
-    static constexpr int kNumSettingsParams = 4;  // LPG Color, LPG Decay, Octave, MIDI Ch
+    static constexpr int kNumSettingsParams = 5;  // LPG Color, LPG Decay, Octave, MIDI Ch, Voices
     std::array<mutables_ui::Parameter, kNumParams> params_;
     std::array<mutables_ui::Parameter, kNumUserDataParams> user_data_params_;  // Children of User Data submenu
     std::array<mutables_ui::Parameter, kNumCVOutParams> cv_out1_params_;  // Children of CV Out 1 submenu
@@ -98,12 +108,14 @@ private:
     static const char* new_engine_names_[];
     static const char* octave_names_[];
     static const char* midi_channel_names_[];
+    static const char* voice_count_names_[];
     static constexpr int kNumBanks = 3;
     static constexpr int kNumSynthEngines = 8;
     static constexpr int kNumDrumEngines = 8;
     static constexpr int kNumNewEngines = 8;
     static constexpr int kNumOctaves = 9;  // C0-C8
     static constexpr int kNumMidiChannels = 17;  // Omni + 1-16
+    static constexpr int kNumVoiceCounts = 4;  // 1, 2, 3, 4
     
     int current_bank_;
     
@@ -144,11 +156,14 @@ private:
     void UpdateAudioEnvFromParams(AudioEnvProcessor& processor, std::array<mutables_ui::Parameter, kNumAudioInParams>& params);
     void SetupCVOutParams(std::array<mutables_ui::Parameter, kNumCVOutParams>& params, const char* name_prefix);
     void SetupAudioInParams(std::array<mutables_ui::Parameter, kNumAudioInParams>& params);
+    void RenderPolyphonicVoices(plaits::Voice::Frame* frames, size_t size);
     
 public:
     // MIDI interface
     void NoteOn(uint8_t note, uint8_t velocity);
     void NoteOff(uint8_t note, uint8_t velocity);
+    void AllNotesOff();
+    void Panic();
     float GetVelocity() const { return midi_velocity_; }
     
     // MIDI clock handling
@@ -157,6 +172,11 @@ public:
     
     // Get MIDI channel setting: 0 = Omni (all), 1-16 = specific channel
     int GetMidiChannel() const { return settings_params_[3].GetIndex(); }
+    
+    // Polyphony info
+    int GetVoiceCount() const { return voice_count_; }
+    int GetActiveVoiceCount() const { return voice_manager_.GetActiveVoiceCount(); }
+    bool IsPolyphonyEnabled() const { return voice_manager_.IsPolyphonyEnabled(); }
     
     // Gate output
     bool GetGateOutput() const;
