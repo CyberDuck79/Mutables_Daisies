@@ -1,0 +1,11 @@
+[submodule "libDaisy"]
+	path = libDaisy
+	url = https://github.com/CyberDuck79/libDaisy.git
+	branch = fix/sd-dma-error-callback
+[submodule "eurorack"]
+	path = eurorack
+	url = https://github.com/CyberDuck79/eurorack.git
+	branch = master
+[submodule "DaisySP"]
+ 	path = DaisySP
+ 	url = https://github.com/electro-smith/DaisySP.git
