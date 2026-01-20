@@ -94,6 +94,9 @@ endif
 CPP_STANDARD = -std=gnu++17
 OPT = -O2
 
+# Add optimization flags (matching stmlib's approach)
+CPPFLAGS += -funroll-loops -finline -finline-functions-called-once
+
 # Create a wrapper for user_data.h to avoid hardware-specific code
 # This needs to be done before compiling
 $(shell echo '#include "user_data_stub.h"' > plaits/user_data.h 2>/dev/null || true)

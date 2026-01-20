@@ -69,6 +69,27 @@ const char* GetUserDataFileNameCallback(int index) {
     return nullptr;
 }
 
+// CV Mapping Cache - rebuild when mappings change
+struct CVMappingCache {
+    mutables_ui::Parameter* mapped_params[8];  // Max 8 params per CV
+    uint8_t count;
+    
+    CVMappingCache() : count(0) {
+        for (int i = 0; i < 8; i++) mapped_params[i] = nullptr;
+    }
+};
+
+static CVMappingCache cv_mappings_[4];  // One per CV input
+static CVMappingCache cc_mappings_[128];  // One per CC number
+static bool mapping_cache_dirty_ = true;  // Rebuild on first audio callback
+
+// Cached CV values (read once per block)
+static float cached_cv_values_[4];
+
+// Cached DAC values (write only when changed)
+static uint16_t last_dac_1_ = 0;
+static uint16_t last_dac_2_ = 0;
+
 // Audio buffers
 float* audio_in[4];
 float* audio_out[4];
@@ -96,6 +117,62 @@ float CalculateMappedValue(const mutables_ui::Parameter& param, float base_value
     
     // CC mapping would be handled elsewhere (MIDI callback)
     return base_value;
+}
+
+// Rebuild CV/CC mapping cache (call when mappings change)
+void RebuildMappingCache() {
+    // Clear all caches
+    for (int i = 0; i < 4; i++) {
+        cv_mappings_[i].count = 0;
+    }
+    for (int i = 0; i < 128; i++) {
+        cc_mappings_[i].count = 0;
+    }
+    
+    auto params = plaits_module.GetParameters();
+    size_t param_count = plaits_module.GetParameterCount();
+    
+    // Build cache from main parameters
+    for (size_t i = 0; i < param_count; i++) {
+        auto& param = params[i];
+        
+        if (param.mapping.IsCVSource()) {
+            int cv_idx = param.mapping.GetCVIndex();
+            auto& cache = cv_mappings_[cv_idx];
+            if (cache.count < 8) {
+                cache.mapped_params[cache.count++] = &param;
+            }
+        } else if (param.mapping.source == MappingSource::CC) {
+            int cc_num = param.mapping.cc_number;
+            auto& cache = cc_mappings_[cc_num];
+            if (cache.count < 8) {
+                cache.mapped_params[cache.count++] = &param;
+            }
+        }
+        
+        // Process SUB children
+        if (param.type == ParamType::SUB && param.children) {
+            for (int j = 0; j < param.child_count; j++) {
+                auto& child = param.children[j];
+                
+                if (child.mapping.IsCVSource()) {
+                    int cv_idx = child.mapping.GetCVIndex();
+                    auto& cache = cv_mappings_[cv_idx];
+                    if (cache.count < 8) {
+                        cache.mapped_params[cache.count++] = &child;
+                    }
+                } else if (child.mapping.source == MappingSource::CC) {
+                    int cc_num = child.mapping.cc_number;
+                    auto& cache = cc_mappings_[cc_num];
+                    if (cache.count < 8) {
+                        cache.mapped_params[cache.count++] = &child;
+                    }
+                }
+            }
+        }
+    }
+    
+    mapping_cache_dirty_ = false;
 }
 
 // Calculate ENUM index from CV value with attenuverter
@@ -126,6 +203,11 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     // Start CPU measurement
     cpu_monitor.OnBlockStart();
     
+    // Rebuild mapping cache if needed (happens when mappings change)
+    if (mapping_cache_dirty_) {
+        RebuildMappingCache();
+    }
+    
     // Update CV inputs with raw ADC values (no pot scaling or processing)
     // This preserves precision for V/Oct and accurate offset capture
     // Invert values since ADC reads are inverted on Daisy Patch (0V = 1.0, 5V = 0.0)
@@ -141,7 +223,12 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
         std::clamp(cv4, 0.0f, 1.0f)
     );
     
-    // Update parameters from CV mappings
+    // Cache filtered CV values (read once per block)
+    cached_cv_values_[0] = cv_inputs.GetFiltered(0);
+    cached_cv_values_[1] = cv_inputs.GetFiltered(1);
+    cached_cv_values_[2] = cv_inputs.GetFiltered(2);
+    cached_cv_values_[3] = cv_inputs.GetFiltered(3);
+    
     auto params = plaits_module.GetParameters();
     size_t param_count = plaits_module.GetParameterCount();
     
@@ -151,111 +238,91 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     float timbre_cv = 0.0f;
     float morph_cv = 0.0f;
     
-    for (size_t i = 0; i < param_count; i++) {
-        auto& param = params[i];
+    // Process CC-mapped parameters using cache
+    for (int cc = 1; cc < 128; cc++) {
+        auto& cache = cc_mappings_[cc];
+        if (cache.count == 0) continue;
         
-        // Handle CC-mapped KNOB parameters
-        // CC replaces the knob as base value (not modulation)
-        if (param.type == ParamType::KNOB && param.mapping.source == MappingSource::CC) {
-            float cc_value = cc_values[param.mapping.cc_number];
-            param.SetNormalizedWithHysteresis(cc_value, kCVHysteresis);
-        }
-        // Handle CV-mapped KNOB parameters
-        else if (param.type == ParamType::KNOB && param.mapping.IsCVSource()) {
-            float cv_value = cv_inputs.GetFiltered(param.mapping.GetCVIndex());
+        float cc_value = cc_values[cc];
+        
+        for (uint8_t i = 0; i < cache.count; i++) {
+            auto* param = cache.mapped_params[i];
             
-            if (param.mapping.plugged) {
-                // Calculate CV signal for Plaits (raw signal without attenuverter)
-                float cv_signal = cv_value - param.mapping.offset;
-                
-                // Store CV signals for specific parameters that Plaits handles
-                // Frequency (index 3) -> frequency modulation
-                // Timbre (index 5) -> timbre modulation  
-                // Morph (index 6) -> morph modulation
-                if (i == 3) frequency_cv = cv_signal;
-                else if (i == 5) timbre_cv = cv_signal;
-                else if (i == 6) morph_cv = cv_signal;
-            }
-            
-            // For display purposes, still update param.value with the full calculation
-            float mapped = CalculateMappedValue(param, param.value, cv_inputs);
-            param.SetNormalizedWithHysteresis(mapped, kCVHysteresis);
-        }
-        // Unmapped KNOB parameters: value is set by encoder, don't modify here
-        // Velocity modulation is applied in the module when using the values
-        else if (param.type == ParamType::CV && param.mapping.IsCVSource()) {
-            // CV type - direct read from CV input (no attenuverter emulation)
-            float cv_value = cv_inputs.GetFiltered(param.mapping.GetCVIndex());
-            param.SetNormalizedWithHysteresis(cv_value, kCVHysteresis);
-        } else if (param.type == ParamType::CV && !param.mapping.IsCVSource()) {
-            // CV type with no mapping - set to 0
-            param.SetNormalizedWithHysteresis(0.0f, kCVHysteresis);
-        } else if (param.type == ParamType::ENUM && param.mapping.source == MappingSource::CC) {
-            // CC control for ENUM - quantized selection from CC value
-            float cc_value = cc_values[param.mapping.cc_number];
-            int index = static_cast<int>(cc_value * param.enum_count);
-            index = std::clamp(index, 0, static_cast<int>(param.enum_count) - 1);
-            param.SetIndex(index);
-        } else if (param.type == ParamType::ENUM && param.mapping.IsCVSource()) {
-            // Bank (i=0) and Engine (i=1): Sample-and-hold on NoteOn when plugged
-            // Other ENUMs: continuous CV control
-            if ((i == 0 || i == 1) && param.mapping.plugged) {
-                // Sample on NoteOn, otherwise use held value
-                if (sample_hold_pending) {
-                    int new_index = CalculateEnumFromCV(param, cv_inputs);
-                    if (i == 0) bank_held_index = new_index;
-                    else engine_held_index = new_index;
-                    param.SetIndex(new_index);
-                } else {
-                    // Use held value
-                    param.SetIndex(i == 0 ? bank_held_index : engine_held_index);
-                }
-            } else {
-                // Normal continuous CV control for other ENUMs or unplugged Bank/Engine
-                int new_index = CalculateEnumFromCV(param, cv_inputs);
-                param.SetIndex(new_index);
+            if (param->type == ParamType::KNOB) {
+                param->SetNormalizedWithHysteresis(cc_value, kCVHysteresis);
+            } else if (param->type == ParamType::ENUM) {
+                int index = static_cast<int>(cc_value * param->enum_count);
+                index = std::clamp(index, 0, static_cast<int>(param->enum_count) - 1);
+                param->SetIndex(index);
             }
         }
+    }
+    
+    // Process CV-mapped parameters using cache
+    for (int cv = 0; cv < 4; cv++) {
+        auto& cache = cv_mappings_[cv];
+        if (cache.count == 0) continue;
         
-        // Process SUB children mappings
-        if (param.type == ParamType::SUB && param.children) {
-            for (int j = 0; j < param.child_count; j++) {
-                auto& child = param.children[j];
-                
-                // Handle CC-mapped KNOB parameters - CC replaces knob value
-                if (child.type == ParamType::KNOB && child.mapping.source == MappingSource::CC) {
-                    float cc_value = cc_values[child.mapping.cc_number];
-                    child.SetNormalizedWithHysteresis(cc_value, kCVHysteresis);
-                }
-                // Handle CV-mapped KNOB parameters
-                else if (child.type == ParamType::KNOB && child.mapping.IsCVSource()) {
-                    float cv_value = cv_inputs.GetFiltered(child.mapping.GetCVIndex());
+        float cv_value = cached_cv_values_[cv];  // Already filtered, read once
+        
+        for (uint8_t i = 0; i < cache.count; i++) {
+            auto* param = cache.mapped_params[i];
+            
+            if (param->type == ParamType::KNOB) {
+                if (param->mapping.plugged) {
+                    // Calculate CV signal for Plaits (raw signal without attenuverter)
+                    float cv_signal = cv_value - param->mapping.offset;
                     
-                    if (child.mapping.plugged) {
-                        // Plugged mode: CV replaces knob as base, with attenuverter
-                        // CV is 0-1, centered at 0.5 when offset was captured
-                        float cv_signal = (cv_value - child.mapping.offset) * child.mapping.attenuverter;
-                        // Note: In plugged mode, the stored value is the offset, so we use it as center
-                        float mapped = child.mapping.offset + cv_signal;
-                        child.SetNormalizedWithHysteresis(std::clamp(mapped, child.min, child.max), kCVHysteresis);
+                    // Store CV signals for specific parameters that Plaits handles
+                    // Frequency (index 3) -> frequency modulation
+                    // Timbre (index 5) -> timbre modulation  
+                    // Morph (index 6) -> morph modulation
+                    if (param == &params[3]) frequency_cv = cv_signal;
+                    else if (param == &params[5]) timbre_cv = cv_signal;
+                    else if (param == &params[6]) morph_cv = cv_signal;
+                }
+                
+                // For display purposes, update param.value with full calculation
+                float mapped = CalculateMappedValue(*param, param->value, cv_inputs);
+                param->SetNormalizedWithHysteresis(mapped, kCVHysteresis);
+            }
+            else if (param->type == ParamType::CV) {
+                // CV type - direct read from CV input (no attenuverter emulation)
+                param->SetNormalizedWithHysteresis(cv_value, kCVHysteresis);
+            }
+            else if (param->type == ParamType::ENUM) {
+                // Bank (params[0]) and Engine (params[1]): Sample-and-hold on NoteOn when plugged
+                if ((param == &params[0] || param == &params[1]) && param->mapping.plugged) {
+                    // Sample on NoteOn, otherwise use held value
+                    if (sample_hold_pending) {
+                        int new_index = CalculateEnumFromCV(*param, cv_inputs);
+                        if (param == &params[0]) bank_held_index = new_index;
+                        else engine_held_index = new_index;
+                        param->SetIndex(new_index);
                     } else {
-                        // Unplugged mode: CV directly controls the value (0-1)
-                        child.SetNormalizedWithHysteresis(cv_value, kCVHysteresis);
+                        // Use held value
+                        param->SetIndex(param == &params[0] ? bank_held_index : engine_held_index);
                     }
+                } else {
+                    // Normal continuous CV control for other ENUMs or unplugged Bank/Engine
+                    int new_index = CalculateEnumFromCV(*param, cv_inputs);
+                    param->SetIndex(new_index);
                 }
-                // Handle CC-mapped ENUM parameters
-                else if (child.type == ParamType::ENUM && child.mapping.source == MappingSource::CC) {
-                    float cc_value = cc_values[child.mapping.cc_number];
-                    int index = static_cast<int>(cc_value * child.enum_count);
-                    index = std::clamp(index, 0, static_cast<int>(child.enum_count) - 1);
-                    child.SetIndex(index);
-                }
-                // Handle CV-mapped ENUM parameters
-                else if (child.type == ParamType::ENUM && child.mapping.IsCVSource()) {
-                    float cv_value = cv_inputs.GetFiltered(child.mapping.GetCVIndex());
-                    int index = static_cast<int>(cv_value * child.enum_count);
-                    index = std::clamp(index, 0, static_cast<int>(child.enum_count) - 1);
-                    child.SetIndex(index);
+            }
+        }
+    }
+    
+    // Handle unmapped CV type parameters - set to 0
+    for (size_t i = 0; i < param_count; i++) {
+        if (params[i].type == ParamType::CV && !params[i].mapping.IsCVSource()) {
+            params[i].SetNormalizedWithHysteresis(0.0f, kCVHysteresis);
+        }
+        // Also check children in SUB menus
+        if (params[i].type == ParamType::SUB && params[i].children) {
+            for (int j = 0; j < params[i].child_count; j++) {
+                auto& child = params[i].children[j];
+                if (child.type == ParamType::CV && !child.mapping.IsCVSource()) {
+                    child.SetNormalizedWithHysteresis(0.0f, kCVHysteresis);
                 }
             }
         }
@@ -305,12 +372,20 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     
     // Write CV modulator outputs to DAC (0-1 float -> 0-4095 DAC value)
     // Channel 1 = CV Out 1, Channel 2 = CV Out 2
+    // Only write if values changed (reduce SPI traffic)
     float cv_out_1 = plaits_module.GetCVOutput(0);
     float cv_out_2 = plaits_module.GetCVOutput(1);
     uint16_t dac_1 = static_cast<uint16_t>(std::clamp(cv_out_1, 0.0f, 1.0f) * 4095.0f);
     uint16_t dac_2 = static_cast<uint16_t>(std::clamp(cv_out_2, 0.0f, 1.0f) * 4095.0f);
-    hw.seed.dac.WriteValue(DacHandle::Channel::ONE, dac_1);
-    hw.seed.dac.WriteValue(DacHandle::Channel::TWO, dac_2);
+    
+    if (dac_1 != last_dac_1_) {
+        hw.seed.dac.WriteValue(DacHandle::Channel::ONE, dac_1);
+        last_dac_1_ = dac_1;
+    }
+    if (dac_2 != last_dac_2_) {
+        hw.seed.dac.WriteValue(DacHandle::Channel::TWO, dac_2);
+        last_dac_2_ = dac_2;
+    }
     
     // Write Gate Output
     hw.gate_output.Write(plaits_module.GetGateOutput());
@@ -503,6 +578,7 @@ void UpdateEncoder() {
                                 param.mapping.offset = cv_inputs.GetFiltered(cv_idx);
                             }
                         }
+                        mapping_cache_dirty_ = true;  // Rebuild cache
                     } else {
                         // Enter edit mode for other items
                         menu.state = UIState::SubmenuEdit;
@@ -517,6 +593,7 @@ void UpdateEncoder() {
                                 param.mapping.offset = cv_inputs.GetFiltered(cv_idx);
                             }
                         }
+                        mapping_cache_dirty_ = true;  // Rebuild cache
                     } else {
                         // Enter edit mode for other items
                         menu.state = UIState::SubmenuEdit;
@@ -546,11 +623,13 @@ void UpdateEncoder() {
                     switch (item) {
                         case 0:  // Mapping
                             encoder_handlers::CycleMappingSource(param, encoder_increment);
+                            mapping_cache_dirty_ = true;  // Rebuild cache
                             break;
                         case 1:  // CC Number (if CC mapped)
                             if (param.mapping.source == MappingSource::CC) {
                                 param.mapping.cc_number += encoder_increment;
                                 param.mapping.cc_number = std::clamp(param.mapping.cc_number, 1, 127);
+                                mapping_cache_dirty_ = true;  // Rebuild cache for new CC
                             }
                             break;
                         case 3:  // Attenuverter
@@ -565,16 +644,19 @@ void UpdateEncoder() {
                 } else if (param.type == ParamType::CV) {
                     if (item == 0) {  // Mapping
                         encoder_handlers::CycleMappingSource(param, encoder_increment);
+                        mapping_cache_dirty_ = true;  // Rebuild cache
                     }
                 } else if (param.type == ParamType::ENUM) {
                     switch (item) {
                         case 0:  // Mapping
                             encoder_handlers::CycleMappingSource(param, encoder_increment);
+                            mapping_cache_dirty_ = true;  // Rebuild cache
                             break;
                         case 1:  // CC Number (if CC mapped)
                             if (param.mapping.source == MappingSource::CC) {
                                 param.mapping.cc_number += encoder_increment;
                                 param.mapping.cc_number = std::clamp(param.mapping.cc_number, 1, 127);
+                                mapping_cache_dirty_ = true;  // Rebuild cache for new CC
                             }
                             break;
                         // case 2: Plugged - handled on short press, not editable
@@ -701,6 +783,7 @@ void UpdateEncoder() {
                                 }
                             }
                             plaits_module.ReloadUserData();
+                            mapping_cache_dirty_ = true;  // Rebuild cache after preset load
                         }
                         
                         // Restart audio
