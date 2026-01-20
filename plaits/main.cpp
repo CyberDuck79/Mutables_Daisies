@@ -1004,6 +1004,22 @@ int main(void) {
     preset_manager.Init(sdmmc, fsi, plaits_module.GetShortName());
     logger.PrintLine("Preset manager initialized");
     
+    // Try to load "default" preset if it exists
+    if (preset_manager.IsSDAvailable()) {
+        bool loaded = preset_manager.LoadPreset(
+            "default",
+            plaits_module.GetParameters(),
+            plaits_module.GetParameterCount()
+        );
+        if (loaded) {
+            logger.PrintLine("Loaded 'default' preset");
+            // Rebuild CV mapping cache after loading preset
+            mapping_cache_dirty_ = true;
+        } else {
+            logger.PrintLine("No 'default' preset found");
+        }
+    }
+    
     // Initialize user data manager and load defaults from SD card
     user_data_manager.Init(fsi, plaits_module.GetShortName());
     user_data_manager.CreateDirectories();  // Create dirs if they don't exist

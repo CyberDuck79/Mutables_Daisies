@@ -1,313 +1,56 @@
-# Mutable Instruments Daisy Port - Common Library
+# Common UI documentation
+*This section documents how to use the UI (user-focused).*
+*For developers: for now, the ports’ source code is the best reference for how to use the library.*
 
-## Overview
+## General usage
+The cursor is shown as:
+-  an underline when selecting a menu item
+-  a white background (highlight) when editing a value
 
-The common library provides a unified framework for porting Mutable Instruments Eurorack modules to the Electrosmith Daisy Patch hardware. It abstracts parameter management, CV/Gate inputs, display rendering, and preset management.
+Encoder rotation scrolls through menu items.
 
-## Hardware Context: Daisy Patch Limitations
+There are two main menu item types: **submenus** and **parameters**.
 
-The Daisy Patch hardware has a key limitation: **knobs and CV inputs are summed before the ADC**, meaning we cannot distinguish between knob position and CV input. This affects how we emulate attenuverters.
+### When the cursor is on a parameter
+-  **Short press**: enter value edit mode (the value is highlighted)
+-  **Encoder rotation**: change the value
+-  **Short press**: exit value edit mode and return to item selection
+-  **Long press**: open the parameter mapping section (CV/MIDI assignment)  
+    Long press again to return to the previous menu.
 
-### Attenuverter Emulation Strategy
+### When the cursor is on a submenu
+-  **Short press**: enter the submenu
+-  There is no long-press behavior on submenu items.
+-  Inside a submenu, the title at the top is also selectable: scroll to it and **short press** to go back to the main menu.
 
-To emulate a knob + CV + attenuverter system:
+## Input detection
+Mutable Instruments modules often change behavior depending on whether a cable is plugged into certain CV inputs. The UI abstractions replicate this behavior even when Patch hardware cannot detect cables directly.
 
-1. **Capture offset**: When `plugged` is enabled, save the current knob position as `offset`
-2. **Calculate CV**: `cv_signal = current_value - offset`
-3. **Apply attenuversion**: `result = offset + (cv_signal * attenuverter)`
+Example (Plaits): if the CV inputs for **Frequency**, **Timbre**, or **Morph** are not considered “plugged in”, the attenuverter amount controls internal envelope modulation instead of external CV modulation.
 
-**Limitation**: If the knob position changes while `plugged` is active, attenuversion will be incorrect relative to the new knob position.
+In the following sections (knob and CV input abstractions), the documentation indicates when the abstraction reports “plugged in” vs “plugged out” to the original firmware, so you can still rely on the original MI manuals.
 
----
+## The knob abstraction
+On Daisy Patch, knobs and CV inputs are electrically linked (the knob value is summed with the CV input). To emulate a “real knob” behavior, the library supports a **virtual plugged/unplugged state**.
 
-## Parameter Types
+While there is no CV mapping, or while the CV mapping state is **Unplugged**, the abstraction reports **input not plugged in** to the original firmware. This allows original MI behaviors to be preserved.
 
-### KNOB - Continuous Parameter
+> **Note**: You can physically plug a cable into the CV input even while the mapping state is **Unplugged**, but the original firmware will still behave as if nothing is plugged in (e.g., Plaits attenuverters will continue to control internal envelope modulation).
 
-For parameters controlled by a knob with optional CV modulation and attenuverter.
+When a knob is mapped to a CV input, an additional **Plugged** ON/OFF parameter appears. It has two functions:
+-  It controls whether the abstraction reports **input plugged in** to the original firmware.
+-  When set to **ON**, it captures an **origin offset** from the current CV input value.
 
-**Display:**
-```
-(name) (value) (mapping) >
-Harmonics 0.45   [2]    >
-```
+The origin offset helps emulate attenuverter behavior even though Patch sums knob + CV. It allows modulation to be applied **relative to the knob position**, even if the code cannot separate “knob contribution” from “external CV contribution”.
 
-**Mapping indicator**: `[1-4]` for CV, `#` for MIDI CC, empty if none
+> **Warning:** After capturing the origin offset, changing the physical knob position can lead to incorrect attenuverter emulation.
 
-**Submenu options:**
-| Option | Values | Description |
-|--------|--------|-------------|
-| `mapping` | None, CV1-4, CC1-127 | Modulation source |
-| `cc_number` | 1-127 | CC number (only shown if CC mapped) |
-| `plugged` | on/off + offset | Captures offset when enabled. Only available for CV mappings. If original module has jack detection, this value is passed to firmware to trigger authentic behavior |
-| `attenuverter` | ±100% (default 0%) | Scales CV around offset point when CV+plugged. If original module has hardware attenuverter, this value is passed to firmware |
-| `velocity` | ±100% | Adds velocity modulation (our layer) |
+Knobs can also be mapped to **MIDI CC**. In this remote mapping mode, the CC value maps directly to the parameter value. The CV input is not considered “plugged in”, so attenuverters do not affect CC mapping.
 
-**Value calculation:**
-```
-if CC mapped:
-    final = cc_value  // CC replaces knob as base value
-else if CV mapped && plugged:
-    cv_signal = raw_value - saved_offset
-    final = saved_offset + (cv_signal * attenuverter) + (velocity_amount * midi_velocity)
-else:
-    final = raw_value
-```
+**Velocity mod** controls the amount of modulation coming from **MIDI velocity** information.
 
-**Note on CC mapping**: When mapped to CC, the CC value becomes the base value (like turning the knob). The internal envelope modulation is still active and controlled by the attenuverter.
-
----
-
-### CV - Direct CV Input
-
-For direct CV signals (envelopes, LFOs) where the knob acts only as an offset. No attenuverter emulation.
-
-**Display:**
-```
-(name) (value) (mapping) >
-Env In  0.72   [3]    >
-```
-
-**Note**: Value cannot be edited with encoder (read-only display)
-
-**Submenu options:**
-| Option | Values | Description |
-|--------|--------|-------------|
-| `mapping` | None, CV1-4 | CV source |
-| `plugged` | on/off + offset | Toggle on short press. Shows offset value when enabled. If original module has jack detection, this value is passed to firmware |
-
----
-
-### ENUM - Enumerated Values
-
-For selecting from a list of discrete options (on/off, engine selection, etc.)
-
-**Display:**
-```
-(name) (value) (mapping) >
-Engine  VA VCF  [G1]   >
-Bank    Synth          >
-```
-
-**Mapping indicator**: `[G1-2]` for Gate, `[1-4]` for CV, `#` for CC
-
-**Submenu options:**
-| Option | Values | Description |
-|--------|--------|-------------|
-| `mapping` | None, Gate1-2, CV1-4, CC1-127 | Control source |
-| `cc_number` | 1-127 | CC number (only shown if CC mapped) |
-| `plugged` | on/off + offset | Only for CV mappings. Toggle on short press. Passed to firmware if module has jack detection |
-| `attenuverter` | ±100% (default 0%) | Only for CV mappings when plugged. Passed to firmware if module has hardware attenuverter |
-
-**If Gate mapped:**
-| Option | Values | Description |
-|--------|--------|-------------|
-| `trigger` | rise, fall, rise & fall | Edge detection |
-| `action` | ++, --, +-, -+ | Increment/decrement behavior |
-
-**Gate action examples:**
-
-| Use case | Trigger | Action | Behavior |
-|----------|---------|--------|----------|
-| Toggle on/off | rise | ++ | Each gate rising edge toggles |
-| Momentary | rise & fall | +- | On when high, off when low |
-| Alternate engines | rise & fall | +- | Alternate between adjacent values |
-| Dual gate nav | G1:rise ++, G2:rise -- | Navigate list with two gates |
-
-**If CV or CC mapped:**
-- Values are quantized: `index = floor(cv * num_values)` or `index = floor(cc / (128 / num_values))`
-
----
-
-### MIDI - Channel Selection
-
-For configuring MIDI channel (useful for modules using V/Oct + Gate, converted to MIDI).
-
-**Display:**
-```
-(name) (value)
-MIDI Ch  CH1   >
-```
-
-**No submenu** - direct value edit (CH1-16)
-
-**Benefits of MIDI over V/Oct:**
-- Polyphony support
-- Velocity modulation
-- Frees Gate + V/Oct inputs for other uses
-- Standardized note handling
-
----
-
-### SUB - Submenu Container
-
-Groups related parameters in a collapsible submenu.
-
-**Display:**
-```
-(name)
-CV Outputs    >
-```
-
-**Submenu**: Contains child parameters (KNOB, ENUM, etc.)
-
-**Restriction**: SUB can only appear in root menu (no nested SUB)
-
-**Use cases:**
-- CV output configuration (envelope vs LFO, parameters)
-- Modulator settings
-- Secondary parameter groups
-
----
-
-### SAVE - Preset Save
-
-Saves current configuration to SD card.
-
-**Display:**
-```
-Save          >
-```
-
-**Behavior:**
-1. Select → Enter character input mode
-2. Character selection: rotate through `a-z`, `0-9`, `-`, `_`, `.`, ` `
-3. Short press → if not ` ` confirm character, move to next OR if ` ` return to previous character, return to root if 1st character
-4. Long press → save preset and return to root
-
-**Storage location:** `<module_name>/presets/<preset_name>.bin`
-
-**Error**: Shows message if SD card not present
-
----
-
-### LOAD - Preset Load
-
-Loads a preset from SD card.
-
-**Display:**
-```
-Load          >
-```
-
-**Behavior:**
-1. Select → Show list of presets from SD card
-2. Navigate with encoder
-3. Short press → load preset, show success, return to root
-
-**Storage location:** `<module_name>/presets/`
-
-**Error**: Shows message if SD card not present or no presets found
-
----
-
-## Mapping Indicators
-
-| Indicator | Meaning |
-|-----------|---------|
-| `*` | Mapped to Something |
-
-
----
-
-## Data Structures
-
-### Parameter
-
-```cpp
-struct Parameter {
-    const char* name;
-    ParamType type;           // KNOB, CV, ENUM, MIDI, SUB, SAVE, LOAD
-    
-    float value;              // Current value (0.0-1.0 for continuous)
-    float min, max;           // Range
-    
-    // For ENUM
-    const char** enum_labels;
-    int enum_count;
-    
-    // Mapping
-    MappingConfig mapping;
-    
-    // For SUB
-    Parameter* children;
-    int child_count;
-};
-
-struct MappingConfig {
-    MappingSource source;     // NONE, CV1-4, GATE1-2, CC
-    int cc_number;            // If source is CC
-    
-    // For KNOB
-    bool plugged;
-    float offset;             // Captured when plugged enabled
-    float attenuverter;       // -1.0 to +1.0
-    float velocity_amount;    // -1.0 to +1.0
-    
-    // For ENUM with Gate
-    TriggerMode trigger;      // RISE, FALL, RISE_AND_FALL
-    EnumAction action;        // INCREMENT, DECREMENT, TOGGLE_PLUS, TOGGLE_MINUS
-};
-```
-
----
-
-## File Structure
-
-```
-common/
-├── README.md           # This documentation
-├── parameter.h         # Parameter types and structures
-├── ui_state.h          # Menu state machine
-├── cv_input.h          # CV input processing with attenuverter
-├── display.h           # OLED display rendering
-├── module_base.h       # Abstract module interface
-└── preset_manager.h    # SD card preset system
-```
-
----
-
-## Implementation Notes
-
-### Firmware Integration
-
-Original Mutable Instruments modules often have:
-- **Jack detection**: Physical detection of cable insertion, triggering alternate behavior (e.g., switching from internal modulation to external CV)
-- **Hardware attenuverters**: Physical knobs that scale CV input before it reaches the DSP
-
-Since Daisy Patch lacks these hardware features, we emulate them with `plugged` and `attenuverter` settings. When porting a module:
-- If the original firmware reads jack detection status → pass our `plugged` value
-- If the original firmware has attenuverter inputs → pass our `attenuverter` value
-
-This ensures authentic behavior (e.g., Plaits enables internal envelope when input is unplugged).
-
-### Native vs Emulated Attenuversion
-
-**Native attenuversion**: Some parameters in original firmware have built-in attenuverter handling (e.g., Plaits Timbre, Morph, FM modulation). For these:
-- Pass raw CV signal (value - offset) to firmware
-- Pass attenuverter value to firmware's modulation amount variable
-- Firmware handles the scaling internally
-
-**Emulated attenuversion**: For parameters without native support in firmware:
-- We compute: `result = offset + (cv_signal * attenuverter)`
-- Applied in our layer before passing to firmware
-
-### MIDI CC Mapping
-
-When a parameter is mapped to MIDI CC:
-- CC value (0-127 scaled to 0.0-1.0) **replaces** the knob as base value
-- Does **not** count as "plugged" - internal modulation (if any) still active
-- Attenuverter still controls internal modulation amount (if supported by firmware)
-- Useful for DAW automation or external MIDI controllers
-
-### MIDI Advantages
-
-Converting V/Oct + Gate to MIDI provides:
-1. **Polyphony**: Multiple voices from single MIDI input
-2. **Velocity**: Natural expression control
-3. **Freed inputs**: Gate and CV inputs available for other mappings
-4. **Standardization**: Consistent note handling across modules
-
-### Gate Output
-
-Gate output can be configured with an enum to replicate input midi Gate or input midi Clock.
+## CV input abstraction
+The CV input abstraction is for inputs that are **not** associated with a knob (typically signal/CV/audio inputs). It is simpler than the knob abstraction:
+-  These inputs cannot be edited manually in the UI.
+-  By default, the abstraction reports **input not plugged in** to the original firmware.
+-  When mapped to a CV input, it automatically reports **plugged in**.

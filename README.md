@@ -1,52 +1,56 @@
-# Mutable Instruments Ports for Daisy
+## Mutable Daisies
+This project ports selected Mutable Instruments modules by Émilie Gillet to the Electro-Smith Daisy platform, with a focus on Daisy Patch and Patch.Init Eurorack hardware.
 
-Ports of [Mutable Instruments](https://pichenettes.github.io/mutable-instruments-documentation/) Eurorack module firmwares to the [Electrosmith Daisy](https://daisy.audio/) platform.
+Daisy Patch is the main target because its screen and encoder enable a richer UI, and it also provides more I/O.
 
-## Overview
+## Patch common UI library
+Even on Daisy Patch (which has the most I/O), it’s impossible to match the number of dedicated knobs and inputs found on the original MI modules.
 
-This repository contains ports of open-source Mutable Instruments DSP code to run on Daisy hardware, specifically targeting the **Daisy Patch.Init()** and **Daisy Patch** modules.
+To compensate for this, I’m building a common UI library that lets you edit module parameters using an on-screen menu and the encoder. The UI also lets you configure I/O (e.g., map parameters to inputs, assign roles to outputs, etc.).
 
-## Repository Structure
+Because configuration can be tedious, a preset system lets you save and recall complete configurations from an SD card.
+> **tip**: The presets named "default" is loaded at start if it exists.
 
-```
-mutables_daisies/
-├── eurorack/          # Mutable Instruments source (submodule)
-│   ├── plaits/        # Macro Oscillator 2
-│   ├── clouds/        # Texture Synthesizer
-│   ├── rings/         # Resonator
-│   ├── braids/        # Macro Oscillator
-│   ├── elements/      # Modal Synthesizer
-│   ├── warps/         # Meta Modulator
-│   ├── stmlib/        # Shared DSP library
-│   └── ...
-├── libDaisy/          # Daisy hardware abstraction (submodule)
-├── DaisySP/           # Daisy DSP library (submodule)
-└── plaits_daisy/      # Plaits port for Patch.Init()
-```
+Each module has its own menu layout, but the goal is to keep the UI largely shared across all ports.
+See [[#Common UI documentation]] for details.
 
-## Ported Modules
+## Original module extensions
+This “hardware virtualization” layer also enables features that were not available on the original hardware.
+For example, any parameter treated as a “knob” can optionally include a virtual attenuverter, even if the original module didn’t provide one.
 
-| Module | Status | Target Hardware |
-|--------|--------|-----------------|
-| **Plaits** | 🟡 Phase 1 (Basic) | Patch.Init() |
-| Clouds | 🔴 Not started | - |
-| Rings | 🔴 Not started | - |
-| Braids | 🔴 Not started | - |
-| Beads | 🔴 Not started | - |
+Daisy Patch also unlocks additional capabilities:
+-  MIDI support
+-  more CPU and RAM
+-  extra I/O compared to the original hardware
 
-### Legend
-- 🟢 Complete
-- 🟡 In Progress
-- 🔴 Not Started
+Ports may add features to take advantage of this. For example, in the Plaits Patch port:
+-  Extra features use the available audio inputs (including audio-rate modulation)
+-  The two CV outputs can be configured to output modulation signals (e.g., envelopes or LFOs)
+-  The SD card allows multiple user datasets (SysEx banks, wavetables, etc.) to be loaded on demand
 
-## Target Hardware
+## Roadmap
+At the moment, only a Daisy Patch port of Plaits is available.
 
-### Daisy Patch.Init()
-- **MCU**: STM32H750 (Cortex-M7, 480 MHz)
-- **RAM**: 64 KB internal + 64 MB SDRAM
-- **Flash**: 128 KB internal + 8 MB QSPI
-- **Audio**: 24-bit stereo codec @ 48kHz
-- **CV I/O**: 4 knobs, 4 CV inputs, 2 CV outputs, 2 gate inputs
+Planned ports (not necessarily in release order):
+-  Elements
+-  Rings
+-  Braids
+-  Blades
+-  Clouds
+-  Beads
+
+Most of these are audio-focused modules. Since I own an ORN8 module, I’m less interested in porting MI CV/Gate-oriented modules. Also, given the limited number of CV/Gate outputs on Daisy Patch and Patch.Init, those ports would likely require too many compromises compared to the original modules.
+
+That said, some CV/Gate algorithms could be included as secondary features, similar to how the Plaits port includes some Warps algorithms.
+
+## Patch.Init firmware idea
+During or after the Patch ports (or possibly never—this is a personal project), I may create dedicated Patch.Init firmware builds for each module.
+
+The idea is to load presets created for the equivalent Patch firmware. Presets could also be generated via a Python tool for users who don’t own a Patch.
+
+Not every configuration can map cleanly to Patch.Init’s I/O, so the documentation would explain per-module compatibility rules (and the Python tool could provide compatibility hints).
+
+This approach addresses Patch.Init’s main limitation: configuring complex modules with a minimal UI (one button and a single-color LED), while still benefiting from most features of the Patch ports (within I/O limits).
 
 ## Getting Started
 
@@ -92,7 +96,7 @@ cd ..
 ### Build a Port
 
 ```bash
-cd plaits_daisy
+cd plaits
 make
 ```
 
