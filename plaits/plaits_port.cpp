@@ -1247,7 +1247,13 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
             // Calculate cutoff frequency with key tracking and envelope modulation
             // Base frequency: 20Hz to 20kHz (log scaled from 0-1 parameter)
             float freq_param = filter_params_[FILTER_FREQ].value;
-            float base_freq = 20.0f * powf(1000.0f, freq_param);  // 20 * 1000^value
+            
+            // Cache base frequency calculation (avoid expensive powf every block)
+            if (freq_param != last_filter_freq_param_) {
+                cached_filter_base_freq_ = 20.0f * powf(1000.0f, freq_param);  // 20 * 1000^value
+                last_filter_freq_param_ = freq_param;
+            }
+            float base_freq = cached_filter_base_freq_;
             
             // Key tracking: 0-100% of note pitch applied to cutoff
             // Reference: C4 (MIDI 60) = no shift, each octave up doubles freq

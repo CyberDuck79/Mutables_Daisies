@@ -148,6 +148,10 @@ private:
     AudioEnvProcessor audio_env_processor_3_;  // IN3
     AudioEnvProcessor audio_env_processor_4_;  // IN4
     
+    // Filter frequency calculation cache (avoid expensive powf every block)
+    float cached_filter_base_freq_ = 0.0f;
+    float last_filter_freq_param_ = -1.0f;
+    
     void UpdatePatchFromParams();
     void SetupParameters();
     void UpdateEngineListForBank(int bank);

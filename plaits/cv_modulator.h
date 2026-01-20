@@ -204,8 +204,22 @@ public:
     
     // Setters
     void SetMode(CVOutMode mode) { mode_ = mode; }
-    void SetAttack(float attack) { attack_ = attack; }
-    void SetRelease(float release) { release_ = release; }
+    void SetAttack(float attack) { 
+        if (attack != last_attack_) {
+            attack_ = attack;
+            float attack_time = 0.0005f * powf(400.0f, attack_);
+            cached_attack_coeff_ = 1.0f - expf(-1.0f / (attack_time * block_rate_));
+            last_attack_ = attack;
+        }
+    }
+    void SetRelease(float release) { 
+        if (release != last_release_) {
+            release_ = release;
+            float release_time = 0.005f * powf(400.0f, release_);
+            cached_release_coeff_ = 1.0f - expf(-1.0f / (release_time * block_rate_));
+            last_release_ = release;
+        }
+    }
     void SetLFOShape(LFOShape shape) { lfo_shape_ = shape; }
     void SetSyncMode(SyncMode mode) { sync_mode_ = mode; }
     void SetRate(float rate) { rate_ = rate; }
@@ -228,27 +242,19 @@ private:
             return 0.0f;
         }
         
-        // Convert 0-1 params to time constants
-        // Attack: 0.5ms to 200ms (log scaled)
-        // attack_ 0->1 maps to 0.0005s -> 0.2s
-        float attack_time = 0.0005f * powf(400.0f, attack_);
-        float attack_coeff = 1.0f - expf(-1.0f / (attack_time * block_rate_));
-        
-        // Release: 5ms to 2000ms (log scaled)
-        // release_ 0->1 maps to 0.005s -> 2.0s
-        float release_time = 0.005f * powf(400.0f, release_);
-        float release_coeff = 1.0f - expf(-1.0f / (release_time * block_rate_));
+        // Use cached coefficients (computed in SetAttack/SetRelease)
+        // This avoids expensive powf/expf every block
         
         if (env_stage_ == 1) {
             // Attack phase
-            env_value_ += attack_coeff * (1.0f - env_value_);
+            env_value_ += cached_attack_coeff_ * (1.0f - env_value_);
             if (env_value_ >= 0.99f) {
                 env_value_ = 1.0f;
                 env_stage_ = 2;  // Move to release
             }
         } else if (env_stage_ == 2) {
             // Release phase
-            env_value_ -= release_coeff * env_value_;
+            env_value_ -= cached_release_coeff_ * env_value_;
             if (env_value_ <= kEnvNearZero) {
                 env_value_ = 0.0f;
                 env_stage_ = 0;  // Done
@@ -394,6 +400,12 @@ private:
     
     float sample_rate_;
     float block_rate_;
+    
+    // AD envelope coefficient cache (avoid expensive powf/expf every block)
+    float cached_attack_coeff_ = 0.0f;
+    float cached_release_coeff_ = 0.0f;
+    float last_attack_ = -1.0f;
+    float last_release_ = -1.0f;
 };
 
 // MIDI clock tracker
