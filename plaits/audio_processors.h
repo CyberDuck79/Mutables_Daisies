@@ -49,6 +49,8 @@ public:
     
     // Process a block and return the final envelope value
     float ProcessBlock(const float* input, size_t size) {
+        // Note: Envelope following has data dependency (each sample depends on previous)
+        // NEON doesn't help here - process serially
         for (size_t i = 0; i < size; i++) {
             Process(input[i]);
         }

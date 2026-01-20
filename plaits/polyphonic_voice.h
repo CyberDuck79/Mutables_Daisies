@@ -10,6 +10,7 @@
 #include "../eurorack/stmlib/utils/buffer_allocator.h"
 #include <algorithm>
 #include <cstring>
+#include <arm_neon.h>
 
 namespace mutables_plaits {
 
@@ -261,11 +262,26 @@ public:
         std::memset(aux_accumulator_, 0, sizeof(aux_accumulator_));
     }
     
-    // Accumulate a voice's output
+    // Accumulate a voice's output (NEON optimized)
     void Accumulate(const float* out, const float* aux, size_t size) {
-        for (size_t i = 0; i < size; i++) {
-            out_accumulator_[i] += out[i];
-            aux_accumulator_[i] += aux[i];
+        // Use NEON to process 4 samples at a time (24 samples = 6 iterations)
+        // kPolyBlockSize is always 24, so we can unroll completely
+        for (size_t i = 0; i < size / 4; i++) {
+            // Load 4 samples from accumulators
+            float32x4_t out_acc = vld1q_f32(&out_accumulator_[i * 4]);
+            float32x4_t aux_acc = vld1q_f32(&aux_accumulator_[i * 4]);
+            
+            // Load 4 samples from voice buffers
+            float32x4_t out_voice = vld1q_f32(&out[i * 4]);
+            float32x4_t aux_voice = vld1q_f32(&aux[i * 4]);
+            
+            // Add voice to accumulator (SIMD add)
+            out_acc = vaddq_f32(out_acc, out_voice);
+            aux_acc = vaddq_f32(aux_acc, aux_voice);
+            
+            // Store results back
+            vst1q_f32(&out_accumulator_[i * 4], out_acc);
+            vst1q_f32(&aux_accumulator_[i * 4], aux_acc);
         }
     }
     
@@ -304,8 +320,8 @@ public:
     }
 
 private:
-    float out_accumulator_[kPolyBlockSize];
-    float aux_accumulator_[kPolyBlockSize];
+    alignas(16) float out_accumulator_[kPolyBlockSize];
+    alignas(16) float aux_accumulator_[kPolyBlockSize];
 };
 
 } // namespace mutables_plaits

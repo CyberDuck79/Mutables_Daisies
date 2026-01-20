@@ -1023,11 +1023,12 @@ void PlaitsPort::RenderPolyphonicVoices(plaits::Voice::Frame* frames, size_t siz
     
     // Polyphonic mode - render each active voice and mix
     // Accumulator buffers for mixing (static to avoid stack allocation)
-    static float out_accum[kBlockSize];
-    static float aux_accum[kBlockSize];
+    // Aligned for NEON SIMD operations (processes 4 floats at once)
+    alignas(16) static float out_accum[kBlockSize];
+    alignas(16) static float aux_accum[kBlockSize];
     
     // Temporary frame buffer for each voice
-    static plaits::Voice::Frame temp_frames[kBlockSize];
+    alignas(16) static plaits::Voice::Frame temp_frames[kBlockSize];
     
     // Precomputed gain table (sqrt scaling) - avoids sqrt() in hot path
     static const float gain_table[5] = {
