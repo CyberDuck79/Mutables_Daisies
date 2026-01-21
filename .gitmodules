@@ -5,7 +5,7 @@
 [submodule "eurorack"]
 	path = eurorack
 	url = https://github.com/CyberDuck79/eurorack.git
-	branch = master
+	branch = polyphony
 [submodule "DaisySP"]
  	path = DaisySP
  	url = https://github.com/electro-smith/DaisySP.git
