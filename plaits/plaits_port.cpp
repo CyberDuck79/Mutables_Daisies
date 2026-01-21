@@ -73,11 +73,6 @@ const char* PlaitsPort::new_engine_names_[] = {
     "Chip"       // 7: Chiptune
 };
 
-// Voice count names (for polyphony setting)
-const char* PlaitsPort::voice_count_names_[] = {
-    "1", "2", "3", "4"
-};
-
 // CV Output mode names
 static const char* cv_out_mode_names[] = {
     "LPG",       // Follows internal LPG envelope
@@ -561,7 +556,6 @@ PlaitsPort::PlaitsPort()
     , patch_(nullptr)
     , modulations_(nullptr)
     , allocator_(nullptr)
-    , voice_count_(1)
     , current_bank_(0)
     , midi_note_(kMidiNoteC4)
     , midi_velocity_(0.8f)
@@ -572,11 +566,6 @@ PlaitsPort::PlaitsPort()
     , midi_clock_hz_(0.0f)
     , gate2_clock_hz_(0.0f)
     , sample_counter_(0) {
-    // Initialize polyphonic voice pointers to null
-    for (int i = 0; i < kMaxPolyVoices - 1; i++) {
-        poly_voices_[i] = nullptr;
-        poly_allocators_[i] = nullptr;
-    }
 }
 
 PlaitsPort::~PlaitsPort() {
@@ -584,12 +573,6 @@ PlaitsPort::~PlaitsPort() {
     if (patch_) delete patch_;
     if (modulations_) delete modulations_;
     if (allocator_) delete allocator_;
-    
-    // Clean up polyphonic voices
-    for (int i = 0; i < kMaxPolyVoices - 1; i++) {
-        if (poly_voices_[i]) delete poly_voices_[i];
-        if (poly_allocators_[i]) delete poly_allocators_[i];
-    }
 }
 
 void PlaitsPort::Init(float sample_rate) {
@@ -608,18 +591,6 @@ void PlaitsPort::Init(float sample_rate) {
     
     // Initialize voice with buffer allocator
     voice_->Init(allocator_);
-    
-    // Initialize polyphonic voices (voices 1-3)
-    for (int i = 0; i < kMaxPolyVoices - 1; i++) {
-        poly_voices_[i] = new plaits::Voice;
-        poly_allocators_[i] = new stmlib::BufferAllocator(poly_buffers_[i], kBufferSize);
-        poly_voices_[i]->Init(poly_allocators_[i]);
-    }
-    
-    // Initialize voice manager and mixer
-    voice_manager_.Init();
-    mixer_.Init();
-    voice_count_ = 1;  // Default to monophonic
     
     // Initialize modulations to zero
     modulations_->engine = 0.0f;
@@ -722,8 +693,6 @@ void PlaitsPort::SetupParameters() {
     settings_params_[2].SetIndex(4);  // Default to C4 (middle C)
     settings_params_[3] = mutables_ui::Parameter::Enum("MIDI Ch", midi_channel_names_, kNumMidiChannels);
     settings_params_[3].SetIndex(0);  // Default to Omni
-    settings_params_[4] = mutables_ui::Parameter::Enum("Voices", voice_count_names_, kNumVoiceCounts);
-    settings_params_[4].SetIndex(0);  // Default to 1 voice (monophonic)
     params_[10] = mutables_ui::Parameter::Sub("Settings", settings_params_.data(), kNumSettingsParams);
     
     // CV Output 1 submenu
@@ -973,20 +942,6 @@ void PlaitsPort::UpdatePatchFromParams() {
     // LPG parameters with velocity modulation
     patch_->lpg_colour = std::clamp(settings_params_[0].value + lpg_col_vel, 0.0f, 1.0f);
     patch_->decay = std::clamp(settings_params_[1].value + lpg_dec_vel, 0.0f, 1.0f);
-    
-    // Update polyphony settings
-    // Voice count from Settings menu (index 0-3 = 1-4 voices)
-    int new_voice_count = settings_params_[4].GetIndex() + 1;
-    if (new_voice_count != voice_count_) {
-        voice_count_ = new_voice_count;
-        voice_manager_.SetVoiceCount(voice_count_);
-    }
-    
-    // Enable/disable polyphony based on engine type
-    // Polyphony is only available for lightweight engines
-    int engine_index = patch_->engine;
-    bool can_poly = IsPolyphonicEngine(engine_index) && (voice_count_ > 1);
-    voice_manager_.SetPolyphonyEnabled(can_poly);
 }
 
 void PlaitsPort::SetCVModulations(float frequency_cv, float timbre_cv, float morph_cv) {
@@ -1006,112 +961,6 @@ void PlaitsPort::ReloadUserData() {
     if (voice_) {
         voice_->ReloadUserData();
     }
-    // Also reload user data for polyphonic voices
-    for (int i = 0; i < kMaxPolyVoices - 1; i++) {
-        if (poly_voices_[i]) {
-            poly_voices_[i]->ReloadUserData();
-        }
-    }
-}
-
-void PlaitsPort::RenderPolyphonicVoices(plaits::Voice::Frame* frames, size_t size) {
-    if (!voice_manager_.IsPolyphonyEnabled()) {
-        // Monophonic mode - just render voice 0 with base patch/modulations
-        voice_->Render(*patch_, *modulations_, frames, size);
-        return;
-    }
-    
-    // Polyphonic mode - render each active voice and mix
-    // Accumulator buffers for mixing (static to avoid stack allocation)
-    // Aligned for NEON SIMD operations (processes 4 floats at once)
-    alignas(16) static float out_accum[kBlockSize];
-    alignas(16) static float aux_accum[kBlockSize];
-    
-    // Temporary frame buffer for each voice
-    alignas(16) static plaits::Voice::Frame temp_frames[kBlockSize];
-    
-    // Precomputed gain table (sqrt scaling) - avoids sqrt() in hot path
-    static const float gain_table[5] = {
-        32767.0f,             // 0 voices (not used)
-        32767.0f,             // 1 voice
-        32767.0f * 0.707f,    // 2 voices (1/sqrt(2))
-        32767.0f * 0.577f,    // 3 voices (1/sqrt(3))
-        32767.0f * 0.5f       // 4 voices (1/sqrt(4))
-    };
-    
-    // Clear accumulators
-    std::memset(out_accum, 0, size * sizeof(float));
-    std::memset(aux_accum, 0, size * sizeof(float));
-    
-    int active_voices = 0;
-    
-    for (int v = 0; v < voice_count_; v++) {
-        const VoiceSlot& slot = voice_manager_.GetSlot(v);
-        
-        // Skip inactive voices (no note assigned)
-        if (!slot.IsActive()) continue;
-        
-        // Prepare per-voice parameters
-        plaits::Patch voice_patch = *patch_;
-        plaits::Modulations voice_mod = *modulations_;
-        
-        // Override note from voice slot
-        voice_patch.note = static_cast<float>(slot.midi_note);
-        
-        // Set trigger based on gate state and just_triggered flag
-        voice_mod.trigger = slot.just_triggered ? 1.0f : (slot.gate ? 0.1f : 0.0f);
-        voice_mod.level = slot.velocity;
-        
-        // Get the appropriate voice object (voice_ for v=0, poly_voices_[v-1] for v>0)
-        plaits::Voice* voice_obj = (v == 0) ? voice_ : poly_voices_[v - 1];
-        
-        // Render this voice
-        voice_obj->Render(voice_patch, voice_mod, temp_frames, size);
-        
-        // Accumulate to mixer buffers
-        const float scale = 1.0f / 32768.0f;
-        for (size_t i = 0; i < size; i++) {
-            out_accum[i] += temp_frames[i].out * scale;
-            aux_accum[i] += temp_frames[i].aux * scale;
-        }
-        
-        active_voices++;
-        
-        // Check if voice has fully decayed (for cleanup)
-        // Optimized: only check first, middle and last samples instead of all
-        if (!slot.gate) {
-            const short threshold = 100; // ~0.3% of full scale
-            bool silent = (std::abs(temp_frames[0].out) <= threshold) &&
-                          (std::abs(temp_frames[size/2].out) <= threshold) &&
-                          (std::abs(temp_frames[size-1].out) <= threshold);
-            if (silent) {
-                voice_manager_.MarkDecayed(v);
-            }
-        }
-    }
-    
-    // Write mixed output back to frames with gain compensation
-    if (active_voices > 0) {
-        // Use precomputed gain table (avoids sqrt in hot path)
-        float gain = gain_table[std::min(active_voices, 4)];
-        for (size_t i = 0; i < size; i++) {
-            frames[i].out = static_cast<short>(std::clamp(out_accum[i] * gain, -32767.0f, 32767.0f));
-            frames[i].aux = static_cast<short>(std::clamp(aux_accum[i] * gain, -32767.0f, 32767.0f));
-            frames[i].out_dry = frames[i].out;
-            frames[i].aux_dry = frames[i].aux;
-        }
-    } else {
-        // No active voices - output silence
-        for (size_t i = 0; i < size; i++) {
-            frames[i].out = 0;
-            frames[i].aux = 0;
-            frames[i].out_dry = 0;
-            frames[i].aux_dry = 0;
-        }
-    }
-    
-    // Clear trigger flags after rendering
-    voice_manager_.ClearTriggerFlags();
 }
 
 void PlaitsPort::Process(float** in, float** out, size_t size) {
@@ -1219,8 +1068,8 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
             modulations_->audio_mod_timbre2 = 0.5f;
         }
         
-        // Render audio (polyphonic or monophonic)
-        RenderPolyphonicVoices(frames, block_size);
+        // Render audio
+        voice_->Render(*patch_, *modulations_, frames, block_size);
         
         // Process CV modulators (once per audio block)
         // Get LPG envelope from voice for LPG_ENV mode
@@ -1517,9 +1366,6 @@ void PlaitsPort::UpdateSampleCounter(size_t samples) {
 void PlaitsPort::NoteOn(uint8_t note, uint8_t velocity) {
     float vel_normalized = static_cast<float>(velocity) / 127.0f;
     
-    // Route through voice manager for polyphony
-    voice_manager_.NoteOn(note, vel_normalized);
-    
     // V/Oct and MIDI pitch are mutually exclusive
     // If V/Oct is mapped to a CV input, ignore MIDI note pitch
     // (MIDI clock and other messages still work, and all messages pass to MIDI out)
@@ -1551,11 +1397,7 @@ void PlaitsPort::NoteOn(uint8_t note, uint8_t velocity) {
 void PlaitsPort::NoteOff(uint8_t note, uint8_t velocity) {
     (void)velocity;
     
-    // Route through voice manager for polyphony
-    voice_manager_.NoteOff(note);
-    
-    // Legacy monophonic handling for backward compatibility
-    // (This ensures midi_gate_ tracks the last released note)
+    // Monophonic handling
     if (!params_[7].mapping.IsCVSource()) {
         if (static_cast<uint8_t>(midi_note_) == note) {
             midi_gate_ = false;
@@ -1567,12 +1409,10 @@ void PlaitsPort::NoteOff(uint8_t note, uint8_t velocity) {
 }
 
 void PlaitsPort::AllNotesOff() {
-    voice_manager_.AllNotesOff();
     midi_gate_ = false;
 }
 
 void PlaitsPort::Panic() {
-    voice_manager_.Panic();
     midi_gate_ = false;
 }
 
