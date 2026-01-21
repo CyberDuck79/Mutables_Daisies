@@ -146,6 +146,12 @@ public:
         // Slew time ~2ms at block rate
         float slew_time = 0.002f;
         slew_coeff_ = 1.0f - expf(-1.0f / (slew_time * block_rate_));
+        
+        // Recalculate envelope coefficients with new block rate
+        float attack_time = 0.0005f * powf(400.0f, attack_);
+        cached_attack_coeff_ = 1.0f - expf(-1.0f / (attack_time * block_rate_));
+        float release_time = 0.005f * powf(400.0f, release_);
+        cached_release_coeff_ = 1.0f - expf(-1.0f / (release_time * block_rate_));
     }
     
     // Trigger for AD envelope and LFO retrig

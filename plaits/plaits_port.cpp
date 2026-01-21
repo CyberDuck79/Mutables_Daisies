@@ -1024,11 +1024,11 @@ void PlaitsPort::RenderPolyphonicVoices(plaits::Voice::Frame* frames, size_t siz
     // Polyphonic mode - render each active voice and mix
     // Accumulator buffers for mixing (static to avoid stack allocation)
     // Aligned for NEON SIMD operations (processes 4 floats at once)
-    alignas(16) static float out_accum[kBlockSize];
-    alignas(16) static float aux_accum[kBlockSize];
+    alignas(16) static float out_accum[kPolyBlockSize];
+    alignas(16) static float aux_accum[kPolyBlockSize];
     
     // Temporary frame buffer for each voice
-    alignas(16) static plaits::Voice::Frame temp_frames[kBlockSize];
+    alignas(16) static plaits::Voice::Frame temp_frames[kPolyBlockSize];
     
     // Precomputed gain table (sqrt scaling) - avoids sqrt() in hot path
     static const float gain_table[5] = {
@@ -1077,17 +1077,8 @@ void PlaitsPort::RenderPolyphonicVoices(plaits::Voice::Frame* frames, size_t siz
         
         active_voices++;
         
-        // Check if voice has fully decayed (for cleanup)
-        // Optimized: only check first, middle and last samples instead of all
-        if (!slot.gate) {
-            const short threshold = 100; // ~0.3% of full scale
-            bool silent = (std::abs(temp_frames[0].out) <= threshold) &&
-                          (std::abs(temp_frames[size/2].out) <= threshold) &&
-                          (std::abs(temp_frames[size-1].out) <= threshold);
-            if (silent) {
-                voice_manager_.MarkDecayed(v);
-            }
-        }
+        // Note: We don't automatically free decayed voices here.
+        // Voices are only stolen when needed for new notes (in voice allocation logic).
     }
     
     // Write mixed output back to frames with gain compensation
@@ -1110,7 +1101,7 @@ void PlaitsPort::RenderPolyphonicVoices(plaits::Voice::Frame* frames, size_t siz
         }
     }
     
-    // Clear trigger flags after rendering
+    // Clear trigger flags and update decay timers
     voice_manager_.ClearTriggerFlags();
 }
 
@@ -1123,7 +1114,8 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
     UpdateAudioEnvFromParams(audio_env_processor_4_, audio_in4_params_);
     
     // Plaits processes in blocks
-    plaits::Voice::Frame frames[kBlockSize];
+    // Static buffer to avoid stack overflow in audio interrupt (96 frames = 768 bytes)
+    alignas(16) static plaits::Voice::Frame frames[kBlockSize];
     
     for (size_t i = 0; i < size; i += kBlockSize) {
         size_t block_size = (i + kBlockSize <= size) ? kBlockSize : (size - i);
@@ -1517,8 +1509,14 @@ void PlaitsPort::UpdateSampleCounter(size_t samples) {
 void PlaitsPort::NoteOn(uint8_t note, uint8_t velocity) {
     float vel_normalized = static_cast<float>(velocity) / 127.0f;
     
-    // Route through voice manager for polyphony
-    voice_manager_.NoteOn(note, vel_normalized);
+    // Pass lambda to query envelope values on-demand (only when stealing)
+    voice_manager_.NoteOn(note, vel_normalized, [this](int voice_idx) -> float {
+        if (voice_idx == 0) {
+            return voice_->GetDecayEnvelope();
+        } else {
+            return poly_voices_[voice_idx - 1]->GetDecayEnvelope();
+        }
+    });
     
     // V/Oct and MIDI pitch are mutually exclusive
     // If V/Oct is mapped to a CV input, ignore MIDI note pitch

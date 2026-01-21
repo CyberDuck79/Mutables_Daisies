@@ -969,7 +969,7 @@ void UpdateDisplay() {
 
 int main(void) {
     hw.Init();
-    hw.SetAudioBlockSize(24);
+    hw.SetAudioBlockSize(96);
     hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);
     
     // Initialize USB serial logger for debug

@@ -16,7 +16,7 @@ namespace mutables_plaits {
 
 // Maximum number of polyphonic voices
 static constexpr int kMaxPolyVoices = 4;
-static constexpr size_t kPolyBlockSize = 24;
+static constexpr size_t kPolyBlockSize = 96;
 
 // Engines that support polyphony (lightweight engines only)
 // These indices match the engine registration order in voice.cc
@@ -120,9 +120,11 @@ public:
         return count;
     }
     
-    // Note On - allocate a voice using steal-oldest strategy
+    // Note On - allocate a voice using envelope-aware stealing
+    // get_envelope: callback to get envelope value for a voice index
     // Returns the voice index allocated
-    int NoteOn(int midi_note, float velocity) {
+    template<typename GetEnvelopeFn>
+    int NoteOn(int midi_note, float velocity, GetEnvelopeFn get_envelope) {
         global_time_++;
         
         if (!polyphony_enabled_ || num_voices_ == 1) {
@@ -155,14 +157,17 @@ public:
             }
         }
         
-        // If no free voice, steal the oldest released note
+        // If no free voice, steal the most decayed released note
         if (voice_idx < 0) {
-            uint32_t oldest_time = UINT32_MAX;
+            float lowest_envelope = 1.0f;
             for (int i = 0; i < num_voices_; i++) {
-                // Prefer stealing released notes (gate=false)
-                if (!slots_[i].gate && slots_[i].trigger_time < oldest_time) {
-                    oldest_time = slots_[i].trigger_time;
-                    voice_idx = i;
+                // Only steal released notes (gate off)
+                if (!slots_[i].gate) {
+                    float env = get_envelope(i);  // Query envelope only when stealing
+                    if (env < lowest_envelope) {
+                        lowest_envelope = env;
+                        voice_idx = i;
+                    }
                 }
             }
         }
@@ -231,13 +236,6 @@ public:
             slots_[i].just_triggered = false;
         }
     }
-    
-    // Mark a voice as fully decayed (to be freed)
-    void MarkDecayed(int index) {
-        if (index >= 0 && index < num_voices_ && !slots_[index].gate) {
-            slots_[index].Clear();
-        }
-    }
 
 private:
     VoiceSlot slots_[kMaxPolyVoices];
@@ -264,8 +262,7 @@ public:
     
     // Accumulate a voice's output (NEON optimized)
     void Accumulate(const float* out, const float* aux, size_t size) {
-        // Use NEON to process 4 samples at a time (24 samples = 6 iterations)
-        // kPolyBlockSize is always 24, so we can unroll completely
+        // Use NEON to process 4 samples at a time (96 samples = 24 iterations)
         for (size_t i = 0; i < size / 4; i++) {
             // Load 4 samples from accumulators
             float32x4_t out_acc = vld1q_f32(&out_accumulator_[i * 4]);

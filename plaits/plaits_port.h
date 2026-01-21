@@ -49,7 +49,7 @@ public:
     
 private:
     // Buffer size constants (must be declared first for array sizes)
-    static constexpr size_t kBlockSize = 24;
+    static constexpr size_t kBlockSize = 96;
     static constexpr size_t kBufferSize = 32768;  // Buffer for Plaits engines
     static constexpr int kMaxPolyVoices = 4;
     
