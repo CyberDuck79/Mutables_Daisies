@@ -1016,8 +1016,16 @@ void PlaitsPort::ReloadUserData() {
 
 void PlaitsPort::RenderPolyphonicVoices(plaits::Voice::Frame* frames, size_t size) {
     if (!voice_manager_.IsPolyphonyEnabled()) {
-        // Monophonic mode - just render voice 0 with base patch/modulations
+        // Monophonic mode - render voice 0
         voice_->Render(*patch_, *modulations_, frames, size);
+        
+        // Apply velocity to amplitude
+        for (size_t i = 0; i < size; i++) {
+            frames[i].out = static_cast<short>(frames[i].out * midi_velocity_);
+            frames[i].aux = static_cast<short>(frames[i].aux * midi_velocity_);
+            frames[i].out_dry = static_cast<short>(frames[i].out_dry * midi_velocity_);
+            frames[i].aux_dry = static_cast<short>(frames[i].aux_dry * midi_velocity_);
+        }
         return;
     }
     
@@ -1061,27 +1069,17 @@ void PlaitsPort::RenderPolyphonicVoices(plaits::Voice::Frame* frames, size_t siz
         // Set trigger based on gate state and just_triggered flag
         voice_mod.trigger = slot.just_triggered ? 1.0f : (slot.gate ? 0.1f : 0.0f);
         
-        // Level: Use CV input if patched, otherwise use velocity
-        // When Level CV is patched, it replaces the internal envelope control
-        if (modulations_->level_patched) {
-            // Use the Level CV value (with optional velocity sensitivity)
-            voice_mod.level = modulations_->level * slot.velocity;
-        } else {
-            // Use velocity to control level (internal envelope active)
-            voice_mod.level = slot.velocity;
-        }
-        
         // Get the appropriate voice object (voice_ for v=0, poly_voices_[v-1] for v>0)
         plaits::Voice* voice_obj = (v == 0) ? voice_ : poly_voices_[v - 1];
         
         // Render this voice
         voice_obj->Render(voice_patch, voice_mod, temp_frames, size);
         
-        // Accumulate to mixer buffers
+        // Accumulate to mixer buffers with velocity scaling
         const float scale = 1.0f / 32768.0f;
         for (size_t i = 0; i < size; i++) {
-            out_accum[i] += temp_frames[i].out * scale;
-            aux_accum[i] += temp_frames[i].aux * scale;
+            out_accum[i] += temp_frames[i].out * scale * slot.velocity;
+            aux_accum[i] += temp_frames[i].aux * scale * slot.velocity;
         }
         
         active_voices++;
@@ -1166,7 +1164,9 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         // Set modulations - keep trigger high while gate is active
         // Plaits does its own edge detection internally
         modulations_->trigger = active_gate ? 1.0f : 0.0f;
-        modulations_->level = params_[6].value;  // Level parameter (CV value if mapped/plugged)
+        
+        // Level value
+        modulations_->level = params_[6].value;
         
         // CV modulation values (set by main.cpp via SetCVModulations)
         modulations_->frequency = frequency_cv_;
@@ -1338,10 +1338,11 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         float vol_vel = midi_velocity_ * params_[8].mapping.velocity_amount;  // Volume parameter
         float volume = std::clamp(params_[8].value + vol_vel, 0.0f, 1.0f);
         
-        // Convert from short to float, apply volume, and copy to outputs
+        // Convert from short to float, apply velocity and volume separately, copy to outputs
         // OUT (wet) -> channel 1, AUX (wet) -> channel 2
         // OUT_DRY -> channel 3, AUX_DRY -> channel 4
         for (size_t j = 0; j < block_size && (i + j) < size; j++) {
+            // Apply velocity for amplitude control, then volume for final level
             float out_sample = (static_cast<float>(frames[j].out) / kAudioScaleInt16) * volume;
             float aux_sample = (static_cast<float>(frames[j].aux) / kAudioScaleInt16) * volume;
             float out_dry_sample = (static_cast<float>(frames[j].out_dry) / kAudioScaleInt16) * volume;
@@ -1367,6 +1368,8 @@ void PlaitsPort::ProcessGate(int gate_index, bool state) {
         // Gate 1: Trigger input for AD envelopes
         // Detect rising edge for CV modulator triggers
         if (state && !gate_state_) {
+            // Gate triggers get full velocity (no velocity info from CV gates)
+            midi_velocity_ = 1.0f;
             cv_modulator_1_.Trigger();
             cv_modulator_2_.Trigger();
             
