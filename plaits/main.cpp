@@ -274,12 +274,12 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
                     float cv_signal = cv_value - param->mapping.offset;
                     
                     // Store CV signals for specific parameters that Plaits handles
-                    // Frequency (index 3) -> frequency modulation
-                    // Timbre (index 5) -> timbre modulation  
-                    // Morph (index 6) -> morph modulation
-                    if (param == &params[3]) frequency_cv = cv_signal;
-                    else if (param == &params[5]) timbre_cv = cv_signal;
-                    else if (param == &params[6]) morph_cv = cv_signal;
+                    // Frequency (index 2) -> frequency modulation
+                    // Timbre (index 4) -> timbre modulation  
+                    // Morph (index 5) -> morph modulation
+                    if (param == &params[2]) frequency_cv = cv_signal;
+                    else if (param == &params[4]) timbre_cv = cv_signal;
+                    else if (param == &params[5]) morph_cv = cv_signal;
                 }
                 
                 // For display purposes, update param.value with full calculation
