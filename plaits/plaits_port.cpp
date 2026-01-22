@@ -1071,6 +1071,14 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         // Render audio
         voice_->Render(*patch_, *modulations_, frames, block_size);
         
+        // Apply velocity to amplitude
+        for (size_t j = 0; j < block_size; j++) {
+            frames[j].out = static_cast<short>(frames[j].out * midi_velocity_);
+            frames[j].aux = static_cast<short>(frames[j].aux * midi_velocity_);
+            frames[j].out_dry = static_cast<short>(frames[j].out_dry * midi_velocity_);
+            frames[j].aux_dry = static_cast<short>(frames[j].aux_dry * midi_velocity_);
+        }
+        
         // Process CV modulators (once per audio block)
         // Get LPG envelope from voice for LPG_ENV mode
         float lpg_gain = voice_->GetLPGGain();
@@ -1214,6 +1222,8 @@ void PlaitsPort::ProcessGate(int gate_index, bool state) {
         // Gate 1: Trigger input for AD envelopes
         // Detect rising edge for CV modulator triggers
         if (state && !gate_state_) {
+            // Gate triggers get full velocity (no velocity info from CV gates)
+            midi_velocity_ = 1.0f;
             cv_modulator_1_.Trigger();
             cv_modulator_2_.Trigger();
             
