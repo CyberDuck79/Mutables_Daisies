@@ -1060,7 +1060,16 @@ void PlaitsPort::RenderPolyphonicVoices(plaits::Voice::Frame* frames, size_t siz
         
         // Set trigger based on gate state and just_triggered flag
         voice_mod.trigger = slot.just_triggered ? 1.0f : (slot.gate ? 0.1f : 0.0f);
-        voice_mod.level = slot.velocity;
+        
+        // Level: Use CV input if patched, otherwise use velocity
+        // When Level CV is patched, it replaces the internal envelope control
+        if (modulations_->level_patched) {
+            // Use the Level CV value (with optional velocity sensitivity)
+            voice_mod.level = modulations_->level * slot.velocity;
+        } else {
+            // Use velocity to control level (internal envelope active)
+            voice_mod.level = slot.velocity;
+        }
         
         // Get the appropriate voice object (voice_ for v=0, poly_voices_[v-1] for v>0)
         plaits::Voice* voice_obj = (v == 0) ? voice_ : poly_voices_[v - 1];
@@ -1157,7 +1166,7 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         // Set modulations - keep trigger high while gate is active
         // Plaits does its own edge detection internally
         modulations_->trigger = active_gate ? 1.0f : 0.0f;
-        modulations_->level = params_[6].value;  // Level parameter
+        modulations_->level = params_[6].value;  // Level parameter (CV value if mapped/plugged)
         
         // CV modulation values (set by main.cpp via SetCVModulations)
         modulations_->frequency = frequency_cv_;
@@ -1170,12 +1179,13 @@ void PlaitsPort::Process(float** in, float** out, size_t size) {
         auto& frequency = params_[2];
         auto& timbre = params_[4];
         auto& morph = params_[5];
+        auto& level = params_[6];
         
         modulations_->frequency_patched = frequency.mapping.IsCVSource() && frequency.mapping.plugged;
         modulations_->timbre_patched = timbre.mapping.IsCVSource() && timbre.mapping.plugged;
         modulations_->morph_patched = morph.mapping.IsCVSource() && morph.mapping.plugged;
         modulations_->trigger_patched = true;  // Always patched via MIDI/Gate
-        modulations_->level_patched = params_[6].mapping.IsCVSource();  // Level parameter
+        modulations_->level_patched = level.mapping.IsCVSource();  // Level parameter
         
         // Warps Lite Stage 1: Audio hybridization via IN1
         // Modes: 0=OFF, 1=XFADE, 2=FOLD, 3=AnaRM, 4=DigRM, 5=XOR, 6=COMP, 7=FM
