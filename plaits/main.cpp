@@ -211,17 +211,25 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     // Update CV inputs with raw ADC values (no pot scaling or processing)
     // This preserves precision for V/Oct and accurate offset capture
     // Invert values since ADC reads are inverted on Daisy Patch (0V = 1.0, 5V = 0.0)
-    float cv1 = 1.0f - hw.controls[DaisyPatch::CTRL_1].GetRawFloat();
-    float cv2 = 1.0f - hw.controls[DaisyPatch::CTRL_2].GetRawFloat();
-    float cv3 = 1.0f - hw.controls[DaisyPatch::CTRL_3].GetRawFloat();
-    float cv4 = 1.0f - hw.controls[DaisyPatch::CTRL_4].GetRawFloat();
+    // Scale from hardware range (0.03-0.96) to full software range (0.0-0.99)
+    auto scale_adc = [](float raw) -> float {
+        constexpr float kADCMin = 0.03f;
+        constexpr float kADCMax = 0.96f;
+        constexpr float kADCRange = kADCMax - kADCMin;  // 0.93
+        constexpr float kDeadzone = 0.005f;  // Values below 0.5% become true 0.0 (displays as 0.00)
+        float scaled = (raw - kADCMin) / kADCRange * 0.99f;
+        scaled = std::clamp(scaled, 0.0f, 0.99f);
+        // Apply deadzone at bottom to ensure true 0.0 when knob is at minimum
+        if (scaled < kDeadzone) scaled = 0.0f;
+        return scaled;
+    };
     
-    cv_inputs.UpdateRawValues(
-        std::clamp(cv1, 0.0f, 1.0f),
-        std::clamp(cv2, 0.0f, 1.0f),
-        std::clamp(cv3, 0.0f, 1.0f),
-        std::clamp(cv4, 0.0f, 1.0f)
-    );
+    float cv1 = scale_adc(1.0f - hw.controls[DaisyPatch::CTRL_1].GetRawFloat());
+    float cv2 = scale_adc(1.0f - hw.controls[DaisyPatch::CTRL_2].GetRawFloat());
+    float cv3 = scale_adc(1.0f - hw.controls[DaisyPatch::CTRL_3].GetRawFloat());
+    float cv4 = scale_adc(1.0f - hw.controls[DaisyPatch::CTRL_4].GetRawFloat());
+    
+    cv_inputs.UpdateRawValues(cv1, cv2, cv3, cv4);
     
     // Cache filtered CV values (read once per block)
     cached_cv_values_[0] = cv_inputs.GetFiltered(0);
