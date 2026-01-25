@@ -5,7 +5,8 @@ TARGET = tests
 SRCS = test_main.cpp \
        test_parameter.cpp \
        test_menu_state.cpp \
-       test_format_utils.cpp
+       test_format_utils.cpp \
+       test_cv_mapping.cpp
 
 OBJS = $(SRCS:.cpp=.o)
 
