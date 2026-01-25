@@ -1,17 +1,18 @@
+#include "../common/constants.h"
+#include "../common/controllers/encoder_controller.h"
+#include "../common/cv_input.h"
+#include "../common/cv_mapping_processor.h"
+#include "../common/display.h"
+#include "../common/midi_processor.h"
+#include "../common/parameter.h"
+#include "../common/preset_manager.h"
+#include "../common/ui_state.h"
+#include "cpu_monitor.h"
 #include "daisy_patch.h"
 #include "daisysp.h"
 #include "logo_bitmap.h"
 #include "plaits_port.h"
 #include "user_data_manager.h"
-// // #include "encoder_handlers.h" - Removed in favor of inline controller
-// logic
-#include "../common/constants.h"
-#include "../common/cv_input.h"
-#include "../common/display.h"
-#include "../common/parameter.h"
-#include "../common/preset_manager.h"
-#include "../common/ui_state.h"
-#include "cpu_monitor.h"
 
 using namespace daisy;
 using namespace daisysp;
@@ -29,6 +30,9 @@ PlaitsPort plaits_module;
 MenuState menu;
 Display display;
 CVInputBank cv_inputs;
+CVMappingProcessor cv_processor;
+MIDIProcessor midi_processor;
+EncoderController encoder_controller(cv_processor);
 
 // SD Card / Presets / User Data
 SdmmcHandler sdmmc;
@@ -70,21 +74,6 @@ const char *GetUserDataFileNameCallback(int index) {
   return nullptr;
 }
 
-// CV Mapping Cache - rebuild when mappings change
-struct CVMappingCache {
-  mutables_ui::Parameter *mapped_params[8]; // Max 8 params per CV
-  uint8_t count;
-
-  CVMappingCache() : count(0) {
-    for (int i = 0; i < 8; i++)
-      mapped_params[i] = nullptr;
-  }
-};
-
-static CVMappingCache cv_mappings_[4];   // One per CV input
-static CVMappingCache cc_mappings_[128]; // One per CC number
-static bool mapping_cache_dirty_ = true; // Rebuild on first audio callback
-
 // Cached CV values (read once per block)
 static float cached_cv_values_[4];
 
@@ -96,122 +85,16 @@ static uint16_t last_dac_2_ = 0;
 float *audio_in[4];
 float *audio_out[4];
 
-// Calculate parameter value with mapping applied
-float CalculateMappedValue(const mutables_ui::Parameter &param,
-                           float base_value, const CVInputBank &cv_inputs) {
-  const MappingConfig &m = param.mapping;
-
-  if (m.source == MappingSource::NONE) {
-    return base_value;
-  }
-
-  if (m.IsCVSource()) {
-    float cv_value = cv_inputs.GetFiltered(m.GetCVIndex());
-
-    if (m.plugged) {
-      // Attenuverter emulation: cv_signal = current - offset
-      float cv_signal = cv_value - m.offset;
-      return std::clamp(m.offset + (cv_signal * m.attenuverter), 0.0f, 1.0f);
-    } else {
-      // Direct CV: just use the value
-      return cv_value;
-    }
-  }
-
-  // CC mapping would be handled elsewhere (MIDI callback)
-  return base_value;
-}
-
-// Rebuild CV/CC mapping cache (call when mappings change)
-void RebuildMappingCache() {
-  // Clear all caches
-  for (int i = 0; i < 4; i++) {
-    cv_mappings_[i].count = 0;
-  }
-  for (int i = 0; i < 128; i++) {
-    cc_mappings_[i].count = 0;
-  }
-
-  auto params = plaits_module.GetParameters();
-  size_t param_count = plaits_module.GetParameterCount();
-
-  // Build cache from main parameters
-  for (size_t i = 0; i < param_count; i++) {
-    auto &param = params[i];
-
-    if (param.mapping.IsCVSource()) {
-      int cv_idx = param.mapping.GetCVIndex();
-      auto &cache = cv_mappings_[cv_idx];
-      if (cache.count < 8) {
-        cache.mapped_params[cache.count++] = &param;
-      }
-    } else if (param.mapping.source == MappingSource::CC) {
-      int cc_num = param.mapping.cc_number;
-      auto &cache = cc_mappings_[cc_num];
-      if (cache.count < 8) {
-        cache.mapped_params[cache.count++] = &param;
-      }
-    }
-
-    // Process SUB children
-    if (param.type == ParamType::SUB && param.children) {
-      for (int j = 0; j < param.child_count; j++) {
-        auto &child = param.children[j];
-
-        if (child.mapping.IsCVSource()) {
-          int cv_idx = child.mapping.GetCVIndex();
-          auto &cache = cv_mappings_[cv_idx];
-          if (cache.count < 8) {
-            cache.mapped_params[cache.count++] = &child;
-          }
-        } else if (child.mapping.source == MappingSource::CC) {
-          int cc_num = child.mapping.cc_number;
-          auto &cache = cc_mappings_[cc_num];
-          if (cache.count < 8) {
-            cache.mapped_params[cache.count++] = &child;
-          }
-        }
-      }
-    }
-  }
-
-  mapping_cache_dirty_ = false;
-}
-
-// Calculate ENUM index from CV value with attenuverter
-int CalculateEnumFromCV(const mutables_ui::Parameter &param,
-                        const CVInputBank &cv_inputs) {
-  const MappingConfig &m = param.mapping;
-
-  if (!m.IsCVSource())
-    return param.GetIndex();
-
-  float cv_value = cv_inputs.GetFiltered(m.GetCVIndex());
-
-  // If plugged, use offset-based attenuverter (like KNOB)
-  float scaled;
-  if (m.plugged) {
-    float cv_signal = cv_value - m.offset;
-    scaled = 0.5f + cv_signal * m.attenuverter;
-  } else {
-    // Without plugged, simple centered scaling
-    scaled = 0.5f + (cv_value - 0.5f) * m.attenuverter;
-  }
-  scaled = std::clamp(scaled, 0.0f, 1.0f);
-
-  // Quantize to enum count
-  int index = static_cast<int>(scaled * param.enum_count);
-  return std::clamp(index, 0, static_cast<int>(param.enum_count) - 1);
-}
-
 void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
                    size_t size) {
   // Start CPU measurement
   cpu_monitor.OnBlockStart();
 
   // Rebuild mapping cache if needed (happens when mappings change)
-  if (mapping_cache_dirty_) {
-    RebuildMappingCache();
+  // Rebuild mapping cache if needed (happens when mappings change)
+  if (cv_processor.IsDirty()) {
+    cv_processor.RebuildCache(plaits_module.GetParameters(),
+                              plaits_module.GetParameterCount());
   }
 
   // Update CV inputs with raw ADC values (no pot scaling or processing)
@@ -247,6 +130,11 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   cached_cv_values_[3] = cv_inputs.GetFiltered(3);
 
   auto params = plaits_module.GetParameters();
+
+  // Configure S&H for Bank and Engine
+  params[0].sample_and_hold = true;
+  params[1].sample_and_hold = true;
+
   size_t param_count = plaits_module.GetParameterCount();
 
   // Calculate CV signals for Plaits modulation inputs
@@ -255,87 +143,38 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   float timbre_cv = 0.0f;
   float morph_cv = 0.0f;
 
-  // Process CC-mapped parameters using cache
-  for (int cc = 1; cc < 128; cc++) {
-    auto &cache = cc_mappings_[cc];
-    if (cache.count == 0)
-      continue;
+  // Process CC-mapped parameters using processor
+  cv_processor.ProcessCCMappings(midi_processor.GetCCValues(), kCVHysteresis);
 
-    float cc_value = cc_values[cc];
+  // Process CV-mapped parameters using processor
+  // Detect Gate 1 Rising Edge for S&H Trigger (Original Plaits behavior)
+  // Logic moved BEFORE processing to ensure zero-latency update
+  static bool last_gate_state = false;
+  bool gate_state = hw.gate_input[0].State();
+  bool gate_trig = gate_state && !last_gate_state;
+  last_gate_state = gate_state;
 
-    for (uint8_t i = 0; i < cache.count; i++) {
-      auto *param = cache.mapped_params[i];
+  // Combine with MIDI trigger (global pending flag)
+  bool do_sample = gate_trig || sample_hold_pending;
+  sample_hold_pending = false; // Clear global flag
 
-      if (param->type == ParamType::KNOB) {
-        param->SetNormalizedWithHysteresis(cc_value, kCVHysteresis);
-      } else if (param->type == ParamType::ENUM) {
-        int index = static_cast<int>(cc_value * param->enum_count);
-        index = std::clamp(index, 0, static_cast<int>(param->enum_count) - 1);
-        param->SetIndex(index);
-      }
-    }
+  // Pass filtered CV values and trigger status
+  cv_processor.ProcessCVMappings(cv_inputs, kCVHysteresis, do_sample);
+
+  // Extract modulation signals for Plaits specific inputs
+  // (Frequency/Timbre/Morph)
+  if (params[2].mapping.plugged &&
+      params[2].mapping.IsCVSource()) { // Frequency
+    float cv = cv_inputs.GetFiltered(params[2].mapping.GetCVIndex());
+    frequency_cv = cv - params[2].mapping.offset;
   }
-
-  // Process CV-mapped parameters using cache
-  for (int cv = 0; cv < 4; cv++) {
-    auto &cache = cv_mappings_[cv];
-    if (cache.count == 0)
-      continue;
-
-    float cv_value = cached_cv_values_[cv]; // Already filtered, read once
-
-    for (uint8_t i = 0; i < cache.count; i++) {
-      auto *param = cache.mapped_params[i];
-
-      if (param->type == ParamType::KNOB) {
-        if (param->mapping.plugged) {
-          // Calculate CV signal for Plaits (raw signal without attenuverter)
-          float cv_signal = cv_value - param->mapping.offset;
-
-          // Store CV signals for specific parameters that Plaits handles
-          // Frequency (index 2) -> frequency modulation
-          // Timbre (index 4) -> timbre modulation
-          // Morph (index 5) -> morph modulation
-          if (param == &params[2])
-            frequency_cv = cv_signal;
-          else if (param == &params[4])
-            timbre_cv = cv_signal;
-          else if (param == &params[5])
-            morph_cv = cv_signal;
-        }
-
-        // For display purposes, update param.value with full calculation
-        float mapped = CalculateMappedValue(*param, param->value, cv_inputs);
-        param->SetNormalizedWithHysteresis(mapped, kCVHysteresis);
-      } else if (param->type == ParamType::CV) {
-        // CV type - direct read from CV input (no attenuverter emulation)
-        param->SetNormalizedWithHysteresis(cv_value, kCVHysteresis);
-      } else if (param->type == ParamType::ENUM) {
-        // Bank (params[0]) and Engine (params[1]): Sample-and-hold on NoteOn
-        // when plugged
-        if ((param == &params[0] || param == &params[1]) &&
-            param->mapping.plugged) {
-          // Sample on NoteOn, otherwise use held value
-          if (sample_hold_pending) {
-            int new_index = CalculateEnumFromCV(*param, cv_inputs);
-            if (param == &params[0])
-              bank_held_index = new_index;
-            else
-              engine_held_index = new_index;
-            param->SetIndex(new_index);
-          } else {
-            // Use held value
-            param->SetIndex(param == &params[0] ? bank_held_index
-                                                : engine_held_index);
-          }
-        } else {
-          // Normal continuous CV control for other ENUMs or unplugged
-          // Bank/Engine
-          int new_index = CalculateEnumFromCV(*param, cv_inputs);
-          param->SetIndex(new_index);
-        }
-      }
-    }
+  if (params[4].mapping.plugged && params[4].mapping.IsCVSource()) { // Timbre
+    float cv = cv_inputs.GetFiltered(params[4].mapping.GetCVIndex());
+    timbre_cv = cv - params[4].mapping.offset;
+  }
+  if (params[5].mapping.plugged && params[5].mapping.IsCVSource()) { // Morph
+    float cv = cv_inputs.GetFiltered(params[5].mapping.GetCVIndex());
+    morph_cv = cv - params[5].mapping.offset;
   }
 
   // Handle unmapped CV type parameters - set to 0
@@ -419,534 +258,83 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   cpu_monitor.OnBlockEnd();
 }
 
-// Forward declaration for AudioCallback restart
-void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
-                   size_t size);
-
-// Helper to cycle mapping source (moved to local scope)
-void CycleMappingSourceLocal(mutables_ui::Parameter &param, int direction) {
-  int current = static_cast<int>(param.mapping.source);
-  if (direction > 0) {
-    if (current == static_cast<int>(MappingSource::NONE))
-      current = static_cast<int>(MappingSource::CV1);
-    else if (current < static_cast<int>(MappingSource::CV4))
-      current++;
-    else if (current == static_cast<int>(MappingSource::CV4))
-      current = static_cast<int>(MappingSource::CC);
-    else
-      current = static_cast<int>(MappingSource::NONE);
-  } else {
-    if (current == static_cast<int>(MappingSource::NONE))
-      current = static_cast<int>(MappingSource::CC);
-    else if (current == static_cast<int>(MappingSource::CC))
-      current = static_cast<int>(MappingSource::CV4);
-    else if (current > static_cast<int>(MappingSource::CV1))
-      current--;
-    else
-      current = static_cast<int>(MappingSource::NONE);
-  }
-  param.mapping.source = static_cast<MappingSource>(current);
-}
-
+// Encoder Update Wrapper
 void UpdateEncoder() {
-  auto params = plaits_module.GetParameters();
-  int encoder_increment = hw.encoder.Increment();
-  bool encoder_rising = hw.encoder.RisingEdge();
-  bool encoder_held = hw.encoder.Pressed();
+  int inc = hw.encoder.Increment();
+  bool pressed = hw.encoder.Pressed();
+  bool rising = hw.encoder.RisingEdge();
 
-  // Track press time for long press
+  // Reuse static press_start logic locally
   static uint32_t press_start = 0;
-  if (encoder_rising) {
+  if (rising)
     press_start = System::GetNow();
+
+  // If we want to pass duration to controller, we can:
+  // But controller logic handles detection if we pass
+  // released? Actually I removed the struct declaration too?
+  // Let's restore the struct if Update uses it.
+
+  EncoderHardwareState hw_state = {inc, pressed, rising, 0};
+
+  // Logic from previous iteration to fix Short vs Long press
+  // on Release
+  static bool encoder_button_last = false;
+
+  if (!pressed && encoder_button_last) {
+    hw_state.press_duration = System::GetNow() - press_start;
+  }
+  encoder_button_last = pressed;
+
+  // Pass to controller
+  // Note: Controller's Update signature expects (hw_state,
+  // menu, params...) BUT in Step 667, Update signature is:
+  // Update(const EncoderHardwareState &hw, MenuState &menu,
+  // ...) AND inside Update it calculates short/long press?
+  // Wait, I updated Controller to calculate it itself in
+  // theory? Let's check Controller Update in Step 667. It
+  // says: "Detect short vs long press on release" "bool
+  // just_released = !hw.pressed && last_pressed_;" So
+  // Controller DOES IT ITSELF. SO main.cpp does NOT need to
+  // calculate short_press/long_press? BUT main.cpp call site
+  // might be passing them?
+  // "encoder_controller.Update(hw_state, menu..."
+  // If I pass hw_state, Controller handles logic.
+  // BUT the user reported "saving not working".
+  // And I claimed "main.cpp was passing both".
+
+  // Let's look at `main.cpp` Usage in the Error Log (Step
+  // 675): Line 299: encoder_controller.Update(hw_state,
+  // menu, ...
+
+  // If `EncoderController::Update` takes `hw_state`
+  // (struct), then main.cpp logic for short/long is
+  // REDUNDANT/IGNORED? In Step 667, Controller Update
+  // signature is: void Update(const EncoderHardwareState
+  // &hw, MenuState &menu, Parameter *params, size_t
+  // param_count)
+
+  // So I just need to construct hw_state correctly.
+  // `hw_state.press_duration`?
+  // Caller (main.cpp) calculates duration?
+  // In Step 667, Update does:
+  // "if (just_released) { if (hw.press_duration >= ...) }"
+  // SO YES, main.cpp MUST calculate duration and put it in
+  // hw_state!
+
+  if (!pressed && encoder_button_last) {
+    hw_state.press_duration = System::GetNow() - press_start;
   }
 
-  bool long_press_detected = false;
-  bool short_press = false;
-
-  if (!encoder_held && encoder_button_last) {
-    // Button just released
-    uint32_t press_duration = System::GetNow() - press_start;
-    if (press_duration >= LONG_PRESS_MS) {
-      long_press_detected = true;
-    } else {
-      short_press = true;
-    }
-  }
-
-  encoder_button_last = encoder_held;
-
-  // Handle encoder based on state
-  switch (menu.state) {
-  case UIState::Navigate: {
-    if (menu.IsInSub()) {
-      // Use visibility-aware navigation for SUB children
-      if (encoder_increment > 0)
-        menu.NextSubChild();
-      if (encoder_increment < 0)
-        menu.PrevSubChild();
-      menu.selected_param = menu.sub_child_selected;
-    } else {
-      if (encoder_increment > 0)
-        menu.NextParam();
-      if (encoder_increment < 0)
-        menu.PrevParam();
-    }
-
-    // Get the currently active parameter array
-    mutables_ui::Parameter *current_params =
-        menu.IsInSub() && menu.sub_parent ? menu.sub_parent->children : params;
-    auto &current_param = current_params[menu.selected_param];
-
-    if (short_press) {
-      // Check if title is selected in SUB (acts as back)
-      if (menu.IsInSub() && menu.IsSubTitleSelected()) {
-        // Exit SUB back to root menu
-        int parent_idx = menu.sub_parent_index;
-        menu.ExitSub();
-        menu.param_count = plaits_module.GetParameterCount();
-        menu.selected_param = (parent_idx >= 0) ? parent_idx : 0;
-        menu.ScrollToSelected();
-      } else if (current_param.IsEditable()) {
-        menu.state = UIState::EditValue;
-      } else if (current_param.type == ParamType::SAVE) {
-        // Enter preset save mode
-        if (preset_manager.IsSDAvailable()) {
-          menu.EnterCharInput();
-        } else {
-          // Show error - no SD card
-          display.RenderMessage("Error", "No SD Card");
-          hw.display.Update();
-          System::Delay(kMessageDisplayDelayMs);
-        }
-      } else if (current_param.type == ParamType::LOAD) {
-        // Enter preset load mode
-        if (preset_manager.IsSDAvailable()) {
-          int count = preset_manager.ScanPresets();
-          if (count > 0) {
-            menu.EnterPresetList(count);
-          } else {
-            display.RenderMessage("Error", "No presets");
-            hw.display.Update();
-            System::Delay(kMessageDisplayDelayMs);
-          }
-        } else {
-          display.RenderMessage("Error", "No SD Card");
-          hw.display.Update();
-          System::Delay(kMessageDisplayDelayMs);
-        }
-      } else if (current_param.type == ParamType::SUB) {
-        // Enter SUB's children as new menu
-        if (current_param.children && current_param.child_count > 0) {
-          menu.EnterSub(&current_param, menu.selected_param);
-          menu.param_count = current_param.child_count;
-          menu.selected_param =
-              menu.sub_child_selected >= 0 ? menu.sub_child_selected : 0;
-        }
-      } else if (current_param.type == ParamType::USER_DATA) {
-        // Enter file browser for user data selection
-        if (user_data_manager.IsInitialized()) {
-          // Get the list of .bin files for this target
-          UserDataManager::Target target = static_cast<UserDataManager::Target>(
-              current_param.user_data_target);
-          user_data_file_count = user_data_manager.ListFiles(
-              target, user_data_files, MAX_USER_DATA_FILES);
-
-          // Enter file browser mode
-          menu.EnterFileBrowser(menu.selected_param, user_data_file_count);
-        } else {
-          display.RenderMessage("Error", "No SD Card");
-          hw.display.Update();
-          System::Delay(kMessageDisplayDelayMs);
-        }
-      }
-    } else if (long_press_detected) {
-      if (menu.IsInSub() && !menu.IsSubTitleSelected()) {
-        // In SUB with a child selected - enter mapping submenu if param has
-        // mapping
-        if (current_param.HasMapping()) {
-          menu.EnterSubmenu(menu.sub_child_selected, current_param.type,
-                            current_param.mapping);
-        }
-      } else if (current_param.HasMapping()) {
-        // Enter mapping submenu for params that have one (KNOB, CV, ENUM)
-        menu.EnterSubmenu(menu.selected_param, current_param.type,
-                          current_param.mapping);
-      }
-    }
-    break;
-  }
-
-  case UIState::EditValue: {
-    // Get the currently active parameter array
-    mutables_ui::Parameter *current_params =
-        menu.IsInSub() && menu.sub_parent ? menu.sub_parent->children : params;
-    auto &param = current_params[menu.selected_param];
-
-    if (encoder_increment != 0) {
-      // Block editing if parameter is CV-mapped and plugged
-      bool is_cv_plugged = param.mapping.IsCVSource() && param.mapping.plugged;
-      bool is_cc_mapped = param.mapping.source == MappingSource::CC;
-
-      if (!is_cv_plugged && !is_cc_mapped) {
-        float step = 0.01f;
-        if (param.type == ParamType::ENUM || param.type == ParamType::MIDI) {
-          step = 1.0f;
-        }
-
-        param.value += encoder_increment * step;
-        param.value = std::clamp(param.value, param.min, param.max);
-      }
-    }
-
-    if (short_press || long_press_detected) {
-      menu.state = UIState::Navigate;
-    }
-    break;
-  }
-
-  case UIState::Submenu: {
-    // Get the correct parameter - from SUB children if we're in a SUB,
-    // otherwise root params
-    mutables_ui::Parameter *submenu_params =
-        menu.IsInSub() && menu.sub_parent ? menu.sub_parent->children : params;
-    auto &param = submenu_params[menu.submenu_param_index];
-
-    // Navigate submenu items
-    if (encoder_increment > 0) {
-      menu.NextSubmenuItem(param.type, param.mapping);
-    }
-    if (encoder_increment < 0) {
-      menu.PrevSubmenuItem(param.type, param.mapping);
-    }
-
-    if (short_press) {
-      int item = menu.submenu_selected_item;
-
-      if (param.type == ParamType::KNOB) {
-        if (item == 2 && param.mapping.IsCVSource()) {
-          // Plugged toggle - special handling
-          param.mapping.plugged = !param.mapping.plugged;
-          if (param.mapping.plugged) {
-            int cv_idx = param.mapping.GetCVIndex();
-            if (cv_idx >= 0) {
-              param.mapping.offset = cv_inputs.GetFiltered(cv_idx);
-            }
-          }
-          mapping_cache_dirty_ = true; // Rebuild cache
-        } else {
-          // Enter edit mode for other items
-          menu.state = UIState::SubmenuEdit;
-        }
-      } else if (param.type == ParamType::ENUM) {
-        if (item == 2 && param.mapping.IsCVSource()) {
-          // Plugged toggle - special handling
-          param.mapping.plugged = !param.mapping.plugged;
-          if (param.mapping.plugged) {
-            int cv_idx = param.mapping.GetCVIndex();
-            if (cv_idx >= 0) {
-              param.mapping.offset = cv_inputs.GetFiltered(cv_idx);
-            }
-          }
-          mapping_cache_dirty_ = true; // Rebuild cache
-        } else {
-          // Enter edit mode for other items
-          menu.state = UIState::SubmenuEdit;
-        }
-      } else {
-        // Enter edit mode for this item
-        menu.state = UIState::SubmenuEdit;
-      }
-    }
-
-    if (long_press_detected) {
-      menu.ExitSubmenu();
-    }
-    break;
-  }
-
-  case UIState::SubmenuEdit: {
-    // Get the correct parameter - from SUB children if we're in a SUB,
-    // otherwise root params
-    mutables_ui::Parameter *submenu_params =
-        menu.IsInSub() && menu.sub_parent ? menu.sub_parent->children : params;
-    auto &param = submenu_params[menu.submenu_param_index];
-    int item = menu.submenu_selected_item;
-
-    if (encoder_increment != 0) {
-      if (param.type == ParamType::KNOB) {
-        switch (item) {
-        case 0: // Mapping
-          CycleMappingSourceLocal(param, encoder_increment);
-          mapping_cache_dirty_ = true; // Rebuild cache
-          break;
-        case 1: // CC Number (if CC mapped)
-          if (param.mapping.source == MappingSource::CC) {
-            param.mapping.cc_number += encoder_increment;
-            param.mapping.cc_number =
-                std::clamp(param.mapping.cc_number, 1, 127);
-            mapping_cache_dirty_ = true; // Rebuild cache for new CC
-          }
-          break;
-        case 3: // Attenuverter
-          param.mapping.attenuverter += encoder_increment * kEncoderStepMedium;
-          param.mapping.attenuverter =
-              std::clamp(param.mapping.attenuverter, -1.0f, 1.0f);
-          break;
-        case 4: // Velocity
-          param.mapping.velocity_amount +=
-              encoder_increment * kEncoderStepMedium;
-          param.mapping.velocity_amount =
-              std::clamp(param.mapping.velocity_amount, -1.0f, 1.0f);
-          break;
-        }
-      } else if (param.type == ParamType::CV) {
-        if (item == 0) { // Mapping
-          CycleMappingSourceLocal(param, encoder_increment);
-          mapping_cache_dirty_ = true; // Rebuild cache
-        }
-      } else if (param.type == ParamType::ENUM) {
-        switch (item) {
-        case 0: // Mapping
-          CycleMappingSourceLocal(param, encoder_increment);
-          mapping_cache_dirty_ = true; // Rebuild cache
-          break;
-        case 1: // CC Number (if CC mapped)
-          if (param.mapping.source == MappingSource::CC) {
-            param.mapping.cc_number += encoder_increment;
-            param.mapping.cc_number =
-                std::clamp(param.mapping.cc_number, 1, 127);
-            mapping_cache_dirty_ = true; // Rebuild cache for new CC
-          }
-          break;
-        // case 2: Plugged - handled on short press, not editable
-        case 3: // Attenuverter (if CV or CC mapped)
-          if (param.mapping.IsCVSource() ||
-              param.mapping.source == MappingSource::CC) {
-            param.mapping.attenuverter +=
-                encoder_increment * kEncoderStepMedium;
-            param.mapping.attenuverter =
-                std::clamp(param.mapping.attenuverter, -1.0f, 1.0f);
-          }
-          break;
-        case 4: // Trigger (if Gate mapped)
-          if (param.mapping.IsGateSource()) {
-            int t = static_cast<int>(param.mapping.trigger) + encoder_increment;
-            t = std::clamp(t, 0, 2);
-            param.mapping.trigger = static_cast<TriggerMode>(t);
-            // Reset action if now invalid
-            if (!menu.IsActionValidForTrigger(param.mapping.action,
-                                              param.mapping.trigger)) {
-              param.mapping.action = EnumAction::INCREMENT;
-            }
-          }
-          break;
-        case 5: // Action (if Gate mapped)
-          if (param.mapping.IsGateSource()) {
-            int max_action =
-                (param.mapping.trigger == TriggerMode::RISE_AND_FALL) ? 3 : 1;
-            int a = static_cast<int>(param.mapping.action) + encoder_increment;
-            a = std::clamp(a, 0, max_action);
-            param.mapping.action = static_cast<EnumAction>(a);
-          }
-          break;
-        }
-      }
-    }
-
-    if (short_press || long_press_detected) {
-      menu.state = UIState::Submenu;
-    }
-    break;
-  }
-
-  case UIState::CharInput: {
-    // Rotate through character set (and title)
-    if (encoder_increment > 0)
-      menu.NextChar();
-    if (encoder_increment < 0)
-      menu.PrevChar();
-
-    if (short_press) {
-      if (menu.char_title_selected) {
-        // Title selected: cancel and exit
-        menu.ExitCharInput();
-      } else {
-        // Confirm character and move to next (or backspace if space)
-        menu.ConfirmChar();
-      }
-    }
-
-    if (long_press_detected) {
-      // Save preset if name is valid (including current unconfirmed char)
-      if (menu.IsFinalPresetNameValid()) {
-        // Get final name including current character
-        char final_name[MenuState::MAX_PRESET_NAME_LEN + 1];
-        menu.GetFinalPresetName(final_name, sizeof(final_name));
-
-        // Stop audio during SD write to prevent interrupt contention
-        hw.StopAudio();
-
-        bool success = preset_manager.SavePreset(
-            final_name, params, plaits_module.GetParameterCount());
-
-        // Restart audio
-        hw.StartAudio(AudioCallback);
-
-        if (success) {
-          display.RenderMessage("Saved!", final_name);
-        } else {
-          display.RenderMessage("Error", "Save failed");
-        }
-        hw.display.Update();
-        System::Delay(kMessageDisplayDelayMs);
-      }
-      menu.ExitCharInput();
-    }
-    break;
-  }
-
-  case UIState::PresetList: {
-    // Navigate preset list
-    if (encoder_increment > 0)
-      menu.NextPreset();
-    if (encoder_increment < 0)
-      menu.PrevPreset();
-
-    if (short_press) {
-      if (menu.preset_title_selected) {
-        // Title selected: cancel and exit
-        menu.ExitPresetList();
-      } else if (menu.preset_count > 0) {
-        const char *preset_name =
-            preset_manager.GetPresetName(menu.GetSelectedPreset());
-        if (preset_name) {
-          // Stop audio during SD read to prevent interrupt contention
-          hw.StopAudio();
-
-          bool success = preset_manager.LoadPreset(
-              preset_name, params, plaits_module.GetParameterCount());
-
-          // After loading preset, reload user data based on filenames
-          if (success) {
-            // Find the User Data SUB param and reload each target
-            for (size_t i = 0; i < plaits_module.GetParameterCount(); i++) {
-              if (params[i].type == ParamType::SUB && params[i].children) {
-                for (size_t c = 0; c < params[i].child_count; c++) {
-                  auto &child = params[i].children[c];
-                  if (child.type == ParamType::USER_DATA) {
-                    UserDataManager::Target target =
-                        static_cast<UserDataManager::Target>(
-                            child.user_data_target);
-                    if (child.user_data_filename[0]) {
-                      user_data_manager.LoadTarget(target,
-                                                   child.user_data_filename);
-                    } else {
-                      user_data_manager.LoadDefaultForTarget(target);
-                    }
-                  }
-                }
-              }
-            }
-            plaits_module.ReloadUserData();
-            mapping_cache_dirty_ = true; // Rebuild cache after preset load
-          }
-
-          // Restart audio
-          hw.StartAudio(AudioCallback);
-
-          if (success) {
-            display.RenderMessage("Loaded!", preset_name);
-          } else {
-            display.RenderMessage("Error", "Load failed");
-          }
-          hw.display.Update();
-          System::Delay(kMessageDisplayDelayMs);
-        }
-      }
-      menu.ExitPresetList();
-    }
-
-    if (long_press_detected) {
-      // Exit without loading
-      menu.ExitPresetList();
-    }
-    break;
-  }
-
-  case UIState::FileBrowser: {
-    // Navigate file list
-    if (encoder_increment > 0)
-      menu.NextFile();
-    if (encoder_increment < 0)
-      menu.PrevFile();
-
-    if (short_press) {
-      // Get the USER_DATA parameter we're editing
-      mutables_ui::Parameter *current_params = menu.IsInSub() && menu.sub_parent
-                                                   ? menu.sub_parent->children
-                                                   : params;
-      auto &user_data_param = current_params[menu.file_browser_param_idx];
-
-      if (menu.IsDefaultSelected()) {
-        // Clear filename to use firmware default
-        user_data_param.SetUserDataFile("");
-      } else {
-        // Get selected file name (index - 1 because 0 is Default)
-        int file_idx = menu.GetSelectedFile() - 1;
-        if (file_idx >= 0 && file_idx < user_data_file_count) {
-          user_data_param.SetUserDataFile(user_data_files[file_idx]);
-        }
-      }
-
-      // Load the user data file
-      UserDataManager::Target target = static_cast<UserDataManager::Target>(
-          user_data_param.user_data_target);
-      const char *filename = user_data_param.user_data_filename[0]
-                                 ? user_data_param.user_data_filename
-                                 : nullptr;
-
-      // Stop audio during SD read
-      hw.StopAudio();
-
-      bool success;
-      if (filename) {
-        success = user_data_manager.LoadTarget(target, filename);
-      } else {
-        // Load default (no file - use firmware built-in)
-        success = user_data_manager.LoadDefaultForTarget(target);
-      }
-
-      // Reload user data in voice
-      plaits_module.ReloadUserData();
-
-      // Restart audio
-      hw.StartAudio(AudioCallback);
-
-      if (success) {
-        display.RenderMessage("Loaded!", filename ? filename : "Default");
-      } else {
-        display.RenderMessage("Error", "Load failed");
-      }
-      hw.display.Update();
-      System::Delay(kMessageDisplayDelayMs);
-
-      menu.ExitFileBrowser();
-    }
-
-    if (long_press_detected) {
-      // Exit without changing
-      menu.ExitFileBrowser();
-    }
-    break;
-  }
-  }
+  encoder_controller.Update(hw_state, menu, plaits_module.GetParameters(),
+                            plaits_module.GetParameterCount());
 }
 
 void ProcessMidi() {
   while (hw.midi.HasEvents()) {
     MidiEvent event = hw.midi.PopEvent();
 
-    // Handle MIDI clock (system realtime, not channel-dependent)
+    // Handle MIDI clock (system realtime, not
+    // channel-dependent)
     if (event.type == SystemRealTime) {
       // MIDI Clock = 0xF8
       if (event.srt_type == TimingClock) {
@@ -954,32 +342,30 @@ void ProcessMidi() {
       }
     }
 
-    // MIDI Thru: Forward all events to output regardless of channel
-    // Reconstruct raw MIDI bytes and send
+    // MIDI Thru: Forward all events to output regardless of
+    // channel
     if (event.type == NoteOn || event.type == NoteOff ||
         event.type == ControlChange) {
-      uint8_t status_byte = 0;
+      uint8_t out_bytes[3];
+      uint8_t status_type = 0;
       if (event.type == NoteOn)
-        status_byte = 0x90;
+        status_type = 0x90;
       else if (event.type == NoteOff)
-        status_byte = 0x80;
+        status_type = 0x80;
       else if (event.type == ControlChange)
-        status_byte = 0xB0;
+        status_type = 0xB0;
 
-      uint8_t bytes[3] = {static_cast<uint8_t>(status_byte | event.channel),
-                          event.data[0], event.data[1]};
-      hw.midi.SendMessage(bytes, 3);
+      size_t size = MIDIProcessor::BuildThruMessage(
+          status_type, event.channel, event.data[0], event.data[1], out_bytes);
+      if (size > 0) {
+        hw.midi.SendMessage(out_bytes, size);
+      }
     }
 
-    // Get MIDI channel filter setting: 0 = Omni, 1-16 = specific channel
-    int midi_channel = plaits_module.GetMidiChannel();
+    // Update MIDI channel from module settings
+    midi_processor.SetChannel(plaits_module.GetMidiChannel());
 
-    // Check if this event should be processed (Omni or matching channel)
-    // Note: event.channel is 0-15, our setting is 0=Omni, 1-16=channel
-    bool channel_match =
-        (midi_channel == 0) || (event.channel == midi_channel - 1);
-
-    if (!channel_match)
+    if (!midi_processor.ShouldProcess(event.channel))
       continue;
 
     if (event.type == NoteOn) {
@@ -996,9 +382,7 @@ void ProcessMidi() {
       plaits_module.NoteOff(note.note, note.velocity);
     } else if (event.type == ControlChange) {
       ControlChangeEvent cc = event.AsControlChange();
-      if (cc.control_number < 128) {
-        cc_values[cc.control_number] = cc.value / 127.0f;
-      }
+      midi_processor.SetCC(cc.control_number, cc.value);
     }
   }
 }
@@ -1026,7 +410,8 @@ void UpdateDisplay() {
     const char *title = current_params[menu.file_browser_param_idx].name;
     display.RenderFileBrowser(menu, title, GetUserDataFileNameCallback);
   } else if (menu.IsInSubmenu() && menu.submenu_param_index >= 0) {
-    // Get the correct parameter - either from SUB children or root params
+    // Get the correct parameter - either from SUB children
+    // or root params
     mutables_ui::Parameter *submenu_params =
         menu.IsInSub() && menu.sub_parent ? menu.sub_parent->children : params;
     display.RenderSubmenu(menu, submenu_params[menu.submenu_param_index]);
@@ -1040,7 +425,7 @@ void UpdateDisplay() {
 
 int main(void) {
   hw.Init();
-  hw.SetAudioBlockSize(24);
+  hw.SetAudioBlockSize(96);
   hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);
 
   // Initialize USB serial logger for debug
@@ -1049,7 +434,8 @@ int main(void) {
 
   // Initialize SD card
   // Using official libDaisy initialization sequence with DMA
-  // Buffer alignment handled in UserDataManager with DMA_BUFFER_MEM_SECTION
+  // Buffer alignment handled in UserDataManager with
+  // DMA_BUFFER_MEM_SECTION
   {
     SdmmcHandler::Config sd_cfg;
     sd_cfg.Defaults(); // FAST speed (50MHz), 4-bit width
@@ -1083,19 +469,22 @@ int main(void) {
     if (loaded) {
       logger.PrintLine("Loaded 'default' preset");
       // Rebuild CV mapping cache after loading preset
-      mapping_cache_dirty_ = true;
+      cv_processor.MarkDirty();
     } else {
       logger.PrintLine("No 'default' preset found");
     }
   }
 
-  // Initialize user data manager and load defaults from SD card
+  // Initialize user data manager and load defaults from SD
+  // card
   user_data_manager.Init(fsi, plaits_module.GetShortName());
-  user_data_manager.CreateDirectories(); // Create dirs if they don't exist
+  user_data_manager.CreateDirectories(); // Create dirs if
+                                         // they don't exist
   user_data_manager.LoadDefaults();      // Logs internally
 
   // Sync user_data_params_ filenames with what was loaded
-  // Find the User Data SUB param and update each child's filename
+  // Find the User Data SUB param and update each child's
+  // filename
   auto params = plaits_module.GetParameters();
   for (size_t i = 0; i < plaits_module.GetParameterCount(); i++) {
     if (params[i].type == ParamType::SUB && params[i].children) {
@@ -1113,12 +502,135 @@ int main(void) {
     }
   }
 
-  // Register user data manager as the global provider for Plaits
-  plaits::g_user_data_provider = &user_data_manager;
+  // Register user data manager as the global provider for
+  // Plaits
   plaits::g_user_data_provider = &user_data_manager;
 
+  // Initialize Encoder Controller Callbacks
+  EncoderCallbacks callbacks;
+
+  callbacks.on_save_preset = [&]() {
+    // Name is already validated by controller/menu before
+    // calling this
+    char final_name[MenuState::MAX_PRESET_NAME_LEN + 1];
+    menu.GetFinalPresetName(final_name, sizeof(final_name));
+
+    if (!preset_manager.IsSDAvailable()) {
+      display.RenderMessage("Error", "No SD Card");
+    } else {
+      hw.StopAudio();
+      bool success =
+          preset_manager.SavePreset(final_name, plaits_module.GetParameters(),
+                                    plaits_module.GetParameterCount());
+      hw.StartAudio(AudioCallback);
+      display.RenderMessage(success ? "Saved!" : "Error",
+                            success ? final_name : "Save failed");
+    }
+    hw.display.Update();
+    daisy::System::Delay(kMessageDisplayDelayMs);
+  };
+
+  callbacks.on_scan_presets = [&]() -> int {
+    if (!preset_manager.IsSDAvailable()) {
+      display.RenderMessage("Error", "No SD Card");
+      hw.display.Update();
+      daisy::System::Delay(kMessageDisplayDelayMs);
+      return 0;
+    }
+    return preset_manager.ScanPresets();
+  };
+
+  callbacks.on_load_preset = [&](int index) {
+    const char *name = preset_manager.GetPresetName(index);
+    if (!name)
+      return;
+
+    hw.StopAudio();
+    bool success = preset_manager.LoadPreset(
+        name, plaits_module.GetParameters(), plaits_module.GetParameterCount());
+    if (success) {
+      // Reload user data logic
+      auto params = plaits_module.GetParameters();
+      for (size_t i = 0; i < plaits_module.GetParameterCount(); i++) {
+        if (params[i].type == ParamType::SUB && params[i].children) {
+          for (size_t c = 0; c < params[i].child_count; c++) {
+            auto &child = params[i].children[c];
+            if (child.type == ParamType::USER_DATA) {
+              UserDataManager::Target target =
+                  static_cast<UserDataManager::Target>(child.user_data_target);
+              if (child.user_data_filename[0])
+                user_data_manager.LoadTarget(target, child.user_data_filename);
+              else
+                user_data_manager.LoadDefaultForTarget(target);
+            }
+          }
+        }
+      }
+      plaits_module.ReloadUserData();
+    }
+    hw.StartAudio(AudioCallback);
+    display.RenderMessage(success ? "Loaded!" : "Error",
+                          success ? name : "Load failed");
+    hw.display.Update();
+    daisy::System::Delay(kMessageDisplayDelayMs);
+  };
+
+  // on_enter_sub not strictly needed if controller handles
+  // simple subs, but let's implement if needed
+  // implementation in controller checks for it? Controller:
+  // if (param.type == ParamType::SUB) ... menu.EnterSub...
+  // Wait, controller header lines 206-212 handle SUB
+  // internally without callback. The callback on_enter_sub
+  // is defined but unused? Or used for custom subs? Let's
+  // leave it empty or minimal.
+  callbacks.on_enter_sub = [](mutables_ui::Parameter *param) {};
+
+  callbacks.on_user_data_browser = [&](int target_int) {
+    UserDataManager::Target target =
+        static_cast<UserDataManager::Target>(target_int);
+    user_data_file_count = user_data_manager.ListFiles(target, user_data_files,
+                                                       MAX_USER_DATA_FILES);
+    menu.EnterFileBrowser(menu.selected_param, user_data_file_count);
+  };
+
+  callbacks.on_user_data_selected = [&](mutables_ui::Parameter *param,
+                                        int file_idx) {
+    if (file_idx == 0) {
+      // Default
+      param->SetUserDataFile("");
+    } else if (file_idx > 0 && file_idx <= user_data_file_count) {
+      param->SetUserDataFile(user_data_files[file_idx - 1]);
+    }
+
+    UserDataManager::Target target =
+        static_cast<UserDataManager::Target>(param->user_data_target);
+    const char *filename =
+        param->user_data_filename[0] ? param->user_data_filename : nullptr;
+
+    hw.StopAudio();
+    bool success = filename ? user_data_manager.LoadTarget(target, filename)
+                            : user_data_manager.LoadDefaultForTarget(target);
+    plaits_module.ReloadUserData();
+    hw.StartAudio(AudioCallback);
+
+    display.RenderMessage(success ? "Loaded!" : "Error",
+                          filename ? filename : "Default");
+    hw.display.Update();
+    daisy::System::Delay(kMessageDisplayDelayMs);
+  };
+
+  callbacks.on_display_message = [&](const char *title, const char *msg) {
+    display.RenderMessage(title, msg);
+    hw.display.Update();
+    daisy::System::Delay(kMessageDisplayDelayMs);
+  };
+
+  encoder_controller.SetCallbacks(callbacks);
+  midi_processor.Init(0); // Omni by default, will be updated in loop
+
   menu.param_count = plaits_module.GetParameterCount();
-  display.Init(&hw, DrawPlaitsLogo); // Pass logo drawing function
+  display.Init(&hw,
+               DrawPlaitsLogo); // Pass logo drawing function
 
   display.RenderBootScreen("Plaitsy");
   System::Delay(3000);

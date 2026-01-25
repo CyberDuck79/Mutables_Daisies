@@ -134,9 +134,8 @@ private:
   float midi_velocity_; // Current MIDI velocity (0.0-1.0)
   bool midi_gate_;      // Gate from MIDI note on/off
 
-  // State
   bool gate_state_;
-  bool previous_gate_;  // For trigger detection
+  bool previous_gate_;  // For Gate 1 trigger detection
   bool previous_gate2_; // For Gate 2 trigger detection
   float sample_rate_;
 
@@ -170,11 +169,6 @@ private:
   void UpdateCVModulatorsFromParams();
   void UpdateAudioEnvFromParams(
       AudioEnvProcessor &processor,
-      std::array<mutables_ui::Parameter, kNumAudioInParams> &params);
-  void
-  SetupCVOutParams(std::array<mutables_ui::Parameter, kNumCVOutParams> &params,
-                   const char *name_prefix);
-  void SetupAudioInParams(
       std::array<mutables_ui::Parameter, kNumAudioInParams> &params);
 
 public:

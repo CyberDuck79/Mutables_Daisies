@@ -1,14 +1,23 @@
 #include "plaits_port.h"
 #include "../common/constants.h"
+#include "../common/parameter_templates/audio_input_config.h"
+#include "../common/parameter_templates/cv_output_config.h"
+#include "../common/parameter_templates/filter_config.h"
+#include "../common/parameter_templates/gate_output_config.h"
 #include "../common/utils/format_utils.h"
 #include "../eurorack/plaits/dsp/voice.h"
 #include "../eurorack/stmlib/utils/buffer_allocator.h"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
 namespace mutables_plaits {
 
 using namespace mutables;
+namespace gate_out = mutables_ui::templates::gate_out;
+namespace audio_in = mutables_ui::templates::audio_in;
+namespace cv_out = mutables_ui::templates::cv_out;
+namespace filter = mutables_ui::templates::filter;
 
 // Bank names
 const char *PlaitsPort::bank_names_[] = {"Synth", "Drum", "New"};
@@ -67,173 +76,6 @@ const char *PlaitsPort::new_engine_names_[] = {
     "StrMch", // 6: String machine
     "Chip"    // 7: Chiptune
 };
-
-// CV Output mode names
-static const char *cv_out_mode_names[] = {
-    "LPG",    // Follows internal LPG envelope
-    "AD",     // AD envelope triggered on gate
-    "LFO",    // Low frequency oscillator
-    "Foll.3", // Follow audio input 3 envelope
-    "Foll.4"  // Follow audio input 4 envelope
-};
-static constexpr int kNumCVOutModes = 5;
-
-// Gate output mode names (for physical Gate Out jack)
-static const char *gate_out_mode_names[] = {
-    "Trig",    // Trigger on Gate 1 rise OR MIDI note on
-    "EndEnv",  // Trigger on envelope end
-    "TrigPrb", // Trigger with probability
-    "ClkDiv",  // Clock divider (MIDI clock or Gate 2)
-    "ClkPrb"   // Clock tick with probability
-};
-static constexpr int kNumGateOutModes = 5;
-
-// Clock divider ratio names (for Gate Out ClkDiv mode)
-static const char *clk_div_names[] = {"/1", "/2",  "/3",  "/4",  "/6",
-                                      "/8", "/12", "/16", "/24", "/32"};
-static constexpr int kNumClkDivs = 10;
-// Actual divider values (MIDI clock = 24 ppq)
-static const int clk_div_values[] = {
-    24,  48,  72,  96,  144,
-    192, 288, 384, 576, 768 // 1, 2, 3, 4, 6, 8, 12, 16, 24, 32 quarter notes
-};
-
-// Gate Out parameter indices
-enum GateOutParamIndex {
-  GATEOUT_MODE = 0,
-  GATEOUT_CLK_DIV = 1,
-  GATEOUT_PROB = 2
-};
-
-// Visibility callback for Gate Out params
-static bool GateOutVisibilityCallback(const mutables_ui::Parameter *siblings,
-                                      uint8_t sibling_count,
-                                      uint8_t param_index) {
-  if (sibling_count < 1)
-    return true;
-
-  int mode = siblings[GATEOUT_MODE].GetIndex();
-
-  switch (param_index) {
-  case GATEOUT_MODE:
-    return true; // Always visible
-  case GATEOUT_CLK_DIV:
-    return (mode == 3); // Only for ClkDiv mode
-  case GATEOUT_PROB:
-    return (mode == 2 || mode == 4); // Only for TrigProb and ClkProb modes
-  default:
-    return true;
-  }
-}
-
-// Format callback for Gate Out probability parameter
-static void GateOutFormatCallback(const mutables_ui::Parameter *param,
-                                  const mutables_ui::Parameter *siblings,
-                                  uint8_t sibling_count, uint8_t param_index,
-                                  char *buffer, size_t buffer_size) {
-  (void)siblings;
-  (void)sibling_count;
-  (void)param_index;
-  snprintf(buffer, buffer_size, "%d%%",
-           static_cast<int>(param->value * 100.0f));
-}
-
-// Audio Input (envelope/trigger) mode names
-static const char *audio_in_mode_names[] = {
-    "OFF",
-    "ENV", // Envelope follower
-    "TRIG" // Transient detector
-};
-static constexpr int kNumAudioInModes = 3;
-
-// Audio In parameter indices
-enum AudioInParamIndex {
-  AUDIOIN_MODE = 0,
-  AUDIOIN_GAIN = 1, // Input gain (1x-10x for line level signals)
-  AUDIOIN_TIMBRE_AMT = 2,
-  AUDIOIN_MORPH_AMT = 3,
-  AUDIOIN_ATTACK = 4,
-  AUDIOIN_RELEASE = 5,
-  AUDIOIN_THRESHOLD = 6,
-  AUDIOIN_HOLDOFF = 7
-};
-
-// Visibility callback for Audio In params
-static bool AudioInVisibilityCallback(const mutables_ui::Parameter *siblings,
-                                      uint8_t sibling_count,
-                                      uint8_t param_index) {
-  if (sibling_count < 1)
-    return true;
-
-  int mode = siblings[AUDIOIN_MODE].GetIndex();
-
-  switch (param_index) {
-  case AUDIOIN_MODE:
-    return true; // Always visible
-  case AUDIOIN_GAIN:
-    return (mode != 0); // Visible in ENV and TRIG modes
-  case AUDIOIN_TIMBRE_AMT:
-  case AUDIOIN_MORPH_AMT:
-  case AUDIOIN_ATTACK:
-  case AUDIOIN_RELEASE:
-    return (mode == 1); // Only for ENV mode
-  case AUDIOIN_THRESHOLD:
-  case AUDIOIN_HOLDOFF:
-    return (mode == 2); // Only for TRIG mode
-  default:
-    return true;
-  }
-}
-
-// Format callback for bipolar percentage display (e.g. ±100%)
-static void BipolarPercentFormatCallback(const mutables_ui::Parameter *param,
-                                         const mutables_ui::Parameter *siblings,
-                                         uint8_t sibling_count,
-                                         uint8_t param_index, char *buffer,
-                                         size_t buffer_size) {
-  mutables_ui::format::FormatBipolarPercent(buffer, buffer_size, param->value);
-}
-
-// Format callback for Audio In params (Attack, Release in ms, Holdoff in ms,
-// Threshold in %)
-static void AudioInFormatCallback(const mutables_ui::Parameter *param,
-                                  const mutables_ui::Parameter *siblings,
-                                  uint8_t sibling_count, uint8_t param_index,
-                                  char *buffer, size_t buffer_size) {
-  float value = param->value;
-
-  switch (param_index) {
-  case AUDIOIN_GAIN:
-    mutables_ui::format::FormatGainDB(buffer, buffer_size, value);
-    break;
-
-  case AUDIOIN_ATTACK:
-    mutables_ui::format::FormatAttackTime(buffer, buffer_size, value);
-    break;
-
-  case AUDIOIN_RELEASE:
-    mutables_ui::format::FormatReleaseTime(buffer, buffer_size, value);
-    break;
-
-  case AUDIOIN_THRESHOLD:
-    mutables_ui::format::FormatPercent(buffer, buffer_size, value);
-    break;
-
-  case AUDIOIN_HOLDOFF:
-    // 20ms to 200ms linear
-    {
-      float ms = 20.0f + value * 180.0f;
-      snprintf(buffer, buffer_size, "%dms", static_cast<int>(ms + 0.5f));
-    }
-    break;
-
-  default:
-    // Default: show as percentage
-    snprintf(buffer, buffer_size, "%d%%",
-             static_cast<int>(value * 100.0f + 0.5f));
-    break;
-  }
-}
 
 // Warps Lite Stage 1 (Audio In 1) mode names - 7 algorithms (no Vocoder)
 static const char *audio_in1_mode_names[] = {
@@ -327,227 +169,6 @@ static void AudioModFormatCallback(const mutables_ui::Parameter *param,
   case AUDIOMOD_TIMBRE:
   default:
     mutables_ui::format::FormatPercent(buffer, buffer_size, value);
-    break;
-  }
-}
-
-// Moog Ladder Filter mode names
-static const char *filter_mode_names[] = {
-    "OFF",
-    "LP12", // 12 dB/oct lowpass (2-pole)
-    "LP24", // 24 dB/oct lowpass (4-pole, classic Moog)
-    "BP12", // 12 dB/oct bandpass
-    "BP24", // 24 dB/oct bandpass
-    "HP12", // 12 dB/oct highpass
-    "HP24"  // 24 dB/oct highpass
-};
-static constexpr int kNumFilterModes = 7;
-
-// Filter parameter indices
-enum FilterParamIndex {
-  FILTER_MODE = 0,
-  FILTER_FREQ = 1,  // Cutoff frequency (20-20000 Hz, log scaled)
-  FILTER_RESO = 2,  // Resonance (0-100%, self-oscillates at high values)
-  FILTER_DRIVE = 3, // Input drive (0-100%)
-  FILTER_TRACK = 4  // Key tracking (0-100%)
-};
-
-// Visibility callback for Filter params
-static bool FilterVisibilityCallback(const mutables_ui::Parameter *siblings,
-                                     uint8_t sibling_count,
-                                     uint8_t param_index) {
-  if (sibling_count < 1)
-    return true;
-
-  int mode = siblings[FILTER_MODE].GetIndex();
-
-  switch (param_index) {
-  case FILTER_MODE:
-    return true; // Always visible
-  case FILTER_FREQ:
-  case FILTER_RESO:
-  case FILTER_DRIVE:
-  case FILTER_TRACK:
-    return (mode != 0); // Only visible when filter is enabled
-  default:
-    return true;
-  }
-}
-
-// Format callback for Filter params
-static void FilterFormatCallback(const mutables_ui::Parameter *param,
-                                 const mutables_ui::Parameter *siblings,
-                                 uint8_t sibling_count, uint8_t param_index,
-                                 char *buffer, size_t buffer_size) {
-  float value = param->value;
-
-  switch (param_index) {
-  case FILTER_FREQ:
-    // 20Hz to 20000Hz log scaled
-    {
-      float freq = 20.0f * powf(1000.0f, value); // 20 * 1000^value
-      if (freq < 100.0f) {
-        snprintf(buffer, buffer_size, "%dHz", static_cast<int>(freq + 0.5f));
-      } else if (freq < 1000.0f) {
-        snprintf(buffer, buffer_size, "%dHz", static_cast<int>(freq + 0.5f));
-      } else {
-        int khz_int = static_cast<int>(freq / 100.0f + 0.5f);
-        snprintf(buffer, buffer_size, "%d.%dkHz", khz_int / 10, khz_int % 10);
-      }
-    }
-    break;
-  case FILTER_RESO:
-  case FILTER_DRIVE:
-  case FILTER_TRACK:
-    // Show as percentage
-    snprintf(buffer, buffer_size, "%d%%",
-             static_cast<int>(value * 100.0f + 0.5f));
-    break;
-  default:
-    snprintf(buffer, buffer_size, "%d%%",
-             static_cast<int>(value * 100.0f + 0.5f));
-    break;
-  }
-}
-
-// LFO shape names
-static const char *lfo_shape_names[] = {"Sine",   "Tri", "Saw",
-                                        "Square", "S&H", "Smooth"};
-static constexpr int kNumLFOShapes = 6;
-
-// Clock sync modes
-static const char *sync_names[] = {"Free", "MIDI", "Gate2"};
-static constexpr int kNumSyncModes = 3;
-
-// Retrig (on/off toggle)
-static const char *retrig_names[] = {"OFF", "ON"};
-static constexpr int kNumRetrigOptions = 2;
-
-// S&H source names
-static const char *sh_source_names[] = {"Random", "CV1", "CV2", "CV3", "CV4"};
-static constexpr int kNumSHSources = 5;
-
-// Clock ratio names for display when MIDI sync is enabled
-static const char *clock_ratio_names[] = {
-    "1/16", "1/16T", "1/16D", "1/8",  "1/8T", "1/8D", "1/4", "1/4T",
-    "1/4D", "1/2",   "1/2T",  "1/2D", "1",    "2",    "4",   "8"};
-static constexpr int kNumClockRatios = 16;
-
-// CV Out parameter indices within SUB
-enum CVOutParamIndex {
-  CVOUT_MODE = 0,
-  CVOUT_ATTACK = 1,
-  CVOUT_RELEASE = 2,
-  CVOUT_SHAPE = 3,
-  CVOUT_SLEW = 4,   // Slew amount for RndSmth mode (right after Shape)
-  CVOUT_SH_SRC = 5, // S&H source (right after Shape)
-  CVOUT_SYNC = 6,
-  CVOUT_RATE = 7,
-  CVOUT_RETRIG = 8, // Reset LFO phase on note trigger
-  CVOUT_AMP = 9,
-  CVOUT_PHASE = 10,
-  CVOUT_SCALE3 = 11, // Scale for Foll.3 mode (0-2x)
-  CVOUT_SCALE4 = 12  // Scale for Foll.4 mode (0-2x)
-};
-
-// Visibility callback for CV Out params
-// Mode 0 = LPG Env: only show Amp
-// Mode 1 = AD: show Attack, Release, Amp
-// Mode 2 = LFO: show Shape, Slew/SH_Src (based on shape), Sync, Rate, Amp,
-// Phase Mode 3 = Foll.3: show Scale3, Amp Mode 4 = Foll.4: show Scale4, Amp
-static bool CVOutVisibilityCallback(const mutables_ui::Parameter *siblings,
-                                    uint8_t sibling_count,
-                                    uint8_t param_index) {
-  if (sibling_count < 1)
-    return true;
-
-  int mode = siblings[CVOUT_MODE].GetIndex();
-  int shape =
-      (sibling_count > CVOUT_SHAPE) ? siblings[CVOUT_SHAPE].GetIndex() : 0;
-  switch (param_index) {
-  case CVOUT_MODE:
-    return true; // Always visible
-  case CVOUT_ATTACK:
-  case CVOUT_RELEASE:
-    return (mode == 1); // Only for AD mode
-  case CVOUT_SHAPE:
-    return (mode == 2); // Only for LFO mode
-  case CVOUT_SLEW:
-    // Only visible for LFO mode AND RndSmth shape (index 5)
-    return (mode == 2) && (shape == 5);
-  case CVOUT_SH_SRC:
-    // Only visible for LFO mode AND S&H shape (index 4)
-    return (mode == 2) && (shape == 4);
-  case CVOUT_SYNC:
-  case CVOUT_RATE:
-  case CVOUT_RETRIG:
-  case CVOUT_PHASE:
-    return (mode == 2); // Only for LFO mode
-  case CVOUT_AMP:
-    return true; // Always visible (all modes use it)
-  case CVOUT_SCALE3:
-    return (mode == 3); // Only for Foll.3 mode
-  case CVOUT_SCALE4:
-    return (mode == 4); // Only for Foll.4 mode
-  default:
-    return true;
-  }
-}
-
-// Format callback for CV Out params
-static void CVOutFormatCallback(const mutables_ui::Parameter *param,
-                                const mutables_ui::Parameter *siblings,
-                                uint8_t sibling_count, uint8_t param_index,
-                                char *buffer, size_t buffer_size) {
-  // Handle ENUM types
-  if (param->type == mutables_ui::ParamType::ENUM) {
-    snprintf(buffer, buffer_size, "%.6s", param->GetEnumLabel());
-    return;
-  }
-
-  float value = param->value;
-
-  switch (param_index) {
-  case CVOUT_ATTACK:
-    mutables_ui::format::FormatAttackTime(buffer, buffer_size, value);
-    break;
-
-  case CVOUT_RELEASE:
-    mutables_ui::format::FormatReleaseTime(buffer, buffer_size, value);
-    break;
-
-  case CVOUT_RATE:
-    // Check if MIDI or Gate2 sync is enabled (index 1 or 2)
-    if (sibling_count > CVOUT_SYNC && siblings[CVOUT_SYNC].GetIndex() >= 1) {
-      // Clock sync mode: show ratio name
-      int ratio_idx = static_cast<int>(value * (kNumClockRatios - 1) + 0.5f);
-      if (ratio_idx < 0)
-        ratio_idx = 0;
-      if (ratio_idx >= kNumClockRatios)
-        ratio_idx = kNumClockRatios - 1;
-      snprintf(buffer, buffer_size, "%s", clock_ratio_names[ratio_idx]);
-    } else {
-      // Free mode: show Hz (0.1 to 20 Hz log scaled)
-      mutables_ui::format::FormatLFORate(buffer, buffer_size, value);
-    }
-    break;
-
-  case CVOUT_AMP:
-  case CVOUT_SLEW:
-    mutables_ui::format::FormatPercent(buffer, buffer_size, value);
-    break;
-
-  case CVOUT_PHASE:
-    mutables_ui::format::FormatDegrees(buffer, buffer_size, value);
-    break;
-
-  case CVOUT_SCALE3:
-  case CVOUT_SCALE4:
-    mutables_ui::format::FormatMultiplier(buffer, buffer_size, value);
-    break;
-
-  default:
-    mutables_ui::format::FormatDecimal(buffer, buffer_size, value);
     break;
   }
 }
@@ -670,23 +291,7 @@ void PlaitsPort::SetupParameters() {
 
   // Filter submenu (Moog ladder filter, post Stage 2)
   // Signal flow: Plaits -> Stage 1 -> Stage 2 -> Filter -> Output
-  filter_params_[FILTER_MODE] =
-      mutables_ui::Parameter::Enum("Mode", filter_mode_names, kNumFilterModes);
-  filter_params_[FILTER_FREQ] = mutables_ui::Parameter::Knob(
-      "Freq", 0.0f, 1.0f, 0.7f); // 20-20000 Hz (default ~2kHz)
-  filter_params_[FILTER_FREQ].format_callback = FilterFormatCallback;
-  filter_params_[FILTER_RESO] =
-      mutables_ui::Parameter::Knob("Reso", 0.0f, 1.0f, 0.0f); // 0-100%
-  filter_params_[FILTER_RESO].format_callback = FilterFormatCallback;
-  filter_params_[FILTER_DRIVE] = mutables_ui::Parameter::Knob(
-      "Drive", 0.0f, 1.0f, 0.25f); // 0-100% (default 25%)
-  filter_params_[FILTER_DRIVE].format_callback = FilterFormatCallback;
-  filter_params_[FILTER_TRACK] = mutables_ui::Parameter::Knob(
-      "Track", 0.0f, 1.0f, 0.0f); // Key tracking 0-100%
-  filter_params_[FILTER_TRACK].format_callback = FilterFormatCallback;
-  for (int i = 0; i < kNumFilterParams; i++) {
-    filter_params_[i].visibility_callback = FilterVisibilityCallback;
-  }
+  mutables_ui::templates::filter::Setup(filter_params_);
   params_[9] = mutables_ui::Parameter::Sub("Filter", filter_params_.data(),
                                            kNumFilterParams);
 
@@ -705,26 +310,17 @@ void PlaitsPort::SetupParameters() {
                                             kNumSettingsParams);
 
   // CV Output 1 submenu
-  SetupCVOutParams(cv_out1_params_, "CV1");
+  mutables_ui::templates::cv_out::Setup(cv_out1_params_);
   params_[11] = mutables_ui::Parameter::Sub("CV Out 1", cv_out1_params_.data(),
                                             kNumCVOutParams);
 
   // CV Output 2 submenu
-  SetupCVOutParams(cv_out2_params_, "CV2");
+  mutables_ui::templates::cv_out::Setup(cv_out2_params_);
   params_[12] = mutables_ui::Parameter::Sub("CV Out 2", cv_out2_params_.data(),
                                             kNumCVOutParams);
 
   // Gate Output submenu
-  gate_out_params_[GATEOUT_MODE] = mutables_ui::Parameter::Enum(
-      "Mode", gate_out_mode_names, kNumGateOutModes);
-  gate_out_params_[GATEOUT_CLK_DIV] =
-      mutables_ui::Parameter::Enum("ClkDiv", clk_div_names, kNumClkDivs);
-  gate_out_params_[GATEOUT_PROB] = mutables_ui::Parameter::Knob(
-      "Prob", 0.0f, 1.0f, 0.5f); // 0-100% probability
-  gate_out_params_[GATEOUT_PROB].format_callback = GateOutFormatCallback;
-  for (int i = 0; i < kNumGateOutParams; i++) {
-    gate_out_params_[i].visibility_callback = GateOutVisibilityCallback;
-  }
+  mutables_ui::templates::gate_out::Setup(gate_out_params_);
   params_[13] = mutables_ui::Parameter::Sub(
       "Gate Out 1", gate_out_params_.data(), kNumGateOutParams);
 
@@ -766,12 +362,12 @@ void PlaitsPort::SetupParameters() {
       "Audio In 2", audio_in2_params_.data(), kNumAudioIn2Params);
 
   // Audio Input 3 submenu (IN3 = audio-derived modulation)
-  SetupAudioInParams(audio_in3_params_);
+  mutables_ui::templates::audio_in::Setup(audio_in3_params_);
   params_[16] = mutables_ui::Parameter::Sub(
       "Audio In 3", audio_in3_params_.data(), kNumAudioInParams);
 
   // Audio Input 4 submenu (IN4 = audio-derived modulation, normalized to IN3)
-  SetupAudioInParams(audio_in4_params_);
+  mutables_ui::templates::audio_in::Setup(audio_in4_params_);
   params_[17] = mutables_ui::Parameter::Sub(
       "Audio In 4", audio_in4_params_.data(), kNumAudioInParams);
 
@@ -793,87 +389,6 @@ void PlaitsPort::SetupParameters() {
   // Save/Load presets
   params_[19] = mutables_ui::Parameter::Save();
   params_[20] = mutables_ui::Parameter::Load();
-}
-
-void PlaitsPort::SetupCVOutParams(
-    std::array<mutables_ui::Parameter, kNumCVOutParams> &params,
-    const char *name_prefix) {
-  // Mode: LPG Env, AD, LFO, Follow
-  params[0] =
-      mutables_ui::Parameter::Enum("Mode", cv_out_mode_names, kNumCVOutModes);
-
-  // AD envelope params (used when mode = AD)
-  params[1] = mutables_ui::Parameter::Knob("Attack", 0.0f, 1.0f,
-                                           0.01f); // 0.5ms-200ms log scaled
-  params[2] = mutables_ui::Parameter::Knob("Release", 0.0f, 1.0f,
-                                           0.3f); // 5ms-2000ms log scaled
-
-  // LFO params (used when mode = LFO)
-  params[3] =
-      mutables_ui::Parameter::Enum("Shape", lfo_shape_names, kNumLFOShapes);
-
-  // Shape-specific params (right after Shape for visibility)
-  params[4] = mutables_ui::Parameter::Knob(
-      "Slew", 0.0f, 1.0f, 0.5f); // RndSmth slew amount (0=fast, 1=slow)
-  params[5] = mutables_ui::Parameter::Enum("SH Src", sh_source_names,
-                                           kNumSHSources); // S&H source
-
-  // More LFO params
-  params[6] = mutables_ui::Parameter::Enum("Sync", sync_names, kNumSyncModes);
-  params[7] = mutables_ui::Parameter::Knob(
-      "Rate", 0.0f, 1.0f, 0.3f); // 0.1-20Hz free, or ratio index when synced
-  params[8] = mutables_ui::Parameter::Enum(
-      "Retrig", retrig_names,
-      kNumRetrigOptions); // Reset LFO phase on note trigger
-
-  // Common params
-  params[9] = mutables_ui::Parameter::Knob("Amp", 0.0f, 1.0f,
-                                           1.0f); // Output amplitude scaling
-  params[10] = mutables_ui::Parameter::Knob(
-      "Phase", 0.0f, 1.0f, 0.0f); // LFO initial phase offset (0-360°)
-
-  // Follow mode params (used when mode = Foll.3 or Foll.4)
-  params[11] = mutables_ui::Parameter::Knob(
-      "Scale3", 0.0f, 1.0f, 0.5f); // 0.0x to 2.0x scaling for IN3
-  params[12] = mutables_ui::Parameter::Knob(
-      "Scale4", 0.0f, 1.0f, 0.5f); // 0.0x to 2.0x scaling for IN4
-
-  // Assign visibility and format callbacks to all params
-  for (int i = 0; i < kNumCVOutParams; i++) {
-    params[i].visibility_callback = CVOutVisibilityCallback;
-    params[i].format_callback = CVOutFormatCallback;
-  }
-}
-
-// Helper function to setup Audio In parameters
-void PlaitsPort::SetupAudioInParams(
-    std::array<mutables_ui::Parameter, kNumAudioInParams> &params) {
-  params[AUDIOIN_MODE] = mutables_ui::Parameter::Enum(
-      "Mode", audio_in_mode_names, kNumAudioInModes);
-  params[AUDIOIN_GAIN] = mutables_ui::Parameter::Knob(
-      "Gain", 0.0f, 1.0f, 0.0f); // 1x-10x (+0dB to +20dB)
-  params[AUDIOIN_GAIN].format_callback = AudioInFormatCallback;
-  params[AUDIOIN_TIMBRE_AMT] =
-      mutables_ui::Parameter::Knob("Tim. Mod", -1.0f, 1.0f, 0.0f); // Bipolar
-  params[AUDIOIN_TIMBRE_AMT].format_callback = BipolarPercentFormatCallback;
-  params[AUDIOIN_MORPH_AMT] =
-      mutables_ui::Parameter::Knob("Mrph Mod", -1.0f, 1.0f, 0.0f); // Bipolar
-  params[AUDIOIN_MORPH_AMT].format_callback = BipolarPercentFormatCallback;
-  params[AUDIOIN_ATTACK] = mutables_ui::Parameter::Knob(
-      "Attack", 0.0f, 1.0f, 0.1f); // 0.5ms-200ms log
-  params[AUDIOIN_ATTACK].format_callback = AudioInFormatCallback;
-  params[AUDIOIN_RELEASE] = mutables_ui::Parameter::Knob(
-      "Release", 0.0f, 1.0f, 0.3f); // 5ms-2000ms log
-  params[AUDIOIN_RELEASE].format_callback = AudioInFormatCallback;
-  params[AUDIOIN_THRESHOLD] = mutables_ui::Parameter::Knob(
-      "Thresh", 0.0f, 1.0f, 0.3f); // Trigger threshold
-  params[AUDIOIN_THRESHOLD].format_callback = AudioInFormatCallback;
-  params[AUDIOIN_HOLDOFF] =
-      mutables_ui::Parameter::Knob("Holdoff", 0.0f, 1.0f, 0.2f); // 20ms-200ms
-  params[AUDIOIN_HOLDOFF].format_callback = AudioInFormatCallback;
-  for (int i = 0; i < kNumAudioInParams; i++) {
-    params[i].visibility_callback = AudioInVisibilityCallback;
-  }
 }
 
 void PlaitsPort::UpdateEngineListForBank(int bank) {
@@ -1067,32 +582,38 @@ void PlaitsPort::Process(float **in, float **out, size_t size) {
                             audio_env_processor_4_.GetMorphModulation();
 
     // Apply audio envelope modulation to patch values (additive, like velocity)
-    // This bypasses the patched/unpatched logic and always works
     patch_->timbre = std::clamp(patch_->timbre + audio_timbre_mod, 0.0f, 1.0f);
     patch_->morph = std::clamp(patch_->morph + audio_morph_mod, 0.0f, 1.0f);
 
-    // Check if transient detector triggered (for potential gate/trigger
-    // routing) Either IN3 or IN4 transient can trigger (if in TRIG mode) Check
-    // for Audio Inputs (Modulation) Use the processor's trigger detection
-    // (which respects gain and checks all samples)
+    // Check for Audio Inputs (Modulation)
+    // Use the processor's trigger detection (which respects gain and checks all
+    // samples)
     bool audio_trigger_3 = audio_env_processor_3_.GetTrigger();
     bool audio_trigger_4 = audio_env_processor_4_.GetTrigger();
 
     // Use MIDI gate OR hardware gate OR audio transient trigger
     bool active_gate = midi_gate_ || gate_state_;
-    if (audio_in3_params_[AUDIOIN_MODE].GetIndex() == 2 && audio_trigger_3) {
-      // IN3 in TRIG mode: audio transients can trigger
-      active_gate = true;
-    }
-    if (audio_in4_params_[AUDIOIN_MODE].GetIndex() == 2 && audio_trigger_4) {
-      // IN4 in TRIG mode: audio transients can trigger
+
+    // In original firmware, Audio In modes were:
+    // 0: Off, 1: On (Processing), 2: Trig (Use as trigger source)
+
+    // Check if Audio In 3 is set to Trig mode
+    if (audio_in3_params_[audio_in::MODE].GetIndex() == 2 && audio_trigger_3) {
+      // Trigger logic if needed...
       active_gate = true;
     }
 
+    // Check if Audio In 4 is set to Trig mode
+    if (audio_in4_params_[audio_in::MODE].GetIndex() == 2 && audio_trigger_4) {
+      // Trigger logic...
+      active_gate = true;
+    }
     // Set modulations - keep trigger high while gate is active
     // Plaits does its own edge detection internally
     modulations_->trigger = active_gate ? 1.0f : 0.0f;
-    modulations_->level = params_[6].value; // Level parameter
+
+    // Level value
+    modulations_->level = params_[6].value;
 
     // CV modulation values (set by main.cpp via SetCVModulations)
     modulations_->frequency = frequency_cv_;
@@ -1105,6 +626,7 @@ void PlaitsPort::Process(float **in, float **out, size_t size) {
     auto &frequency = params_[2];
     auto &timbre = params_[4];
     auto &morph = params_[5];
+    auto &level = params_[6];
 
     modulations_->frequency_patched =
         frequency.mapping.IsCVSource() && frequency.mapping.plugged;
@@ -1113,8 +635,14 @@ void PlaitsPort::Process(float **in, float **out, size_t size) {
     modulations_->morph_patched =
         morph.mapping.IsCVSource() && morph.mapping.plugged;
     modulations_->trigger_patched = true; // Always patched via MIDI/Gate
-    modulations_->level_patched =
-        params_[6].mapping.IsCVSource(); // Level parameter
+    modulations_->level_patched = level.mapping.IsCVSource(); // Level parameter
+
+    // Update LEDs or other UI feedback if needed
+    // ...
+
+    // Update Gate Output parameters from UI
+    int gate_out_mode = gate_out_params_[gate_out::MODE].GetIndex();
+    // ... update gate output logic if parameter changed ...
 
     // Warps Lite Stage 1: Audio hybridization via IN1
     // Modes: 0=OFF, 1=XFADE, 2=FOLD, 3=AnaRM, 4=DigRM, 5=XOR, 6=COMP, 7=FM
@@ -1155,17 +683,18 @@ void PlaitsPort::Process(float **in, float **out, size_t size) {
       modulations_->audio_mod_timbre2 = 0.5f;
     }
 
-    // Render audio
+    // Render audio (monophonic)
     voice_->Render(*patch_, *modulations_, frames, block_size);
 
-    // Apply velocity to amplitude
+    // Apply velocity to amplitude (always-on velocity requested by user)
+    // Note: Volume parameter modulation is applied separately below
     for (size_t j = 0; j < block_size; j++) {
-      frames[j].out = static_cast<short>(frames[j].out * midi_velocity_);
-      frames[j].aux = static_cast<short>(frames[j].aux * midi_velocity_);
+      frames[j].out = static_cast<int16_t>(frames[j].out * midi_velocity_);
+      frames[j].aux = static_cast<int16_t>(frames[j].aux * midi_velocity_);
       frames[j].out_dry =
-          static_cast<short>(frames[j].out_dry * midi_velocity_);
+          static_cast<int16_t>(frames[j].out_dry * midi_velocity_);
       frames[j].aux_dry =
-          static_cast<short>(frames[j].aux_dry * midi_velocity_);
+          static_cast<int16_t>(frames[j].aux_dry * midi_velocity_);
     }
 
     // Process CV modulators (once per audio block)
@@ -1176,7 +705,7 @@ void PlaitsPort::Process(float **in, float **out, size_t size) {
     // MOOG LADDER FILTER (post Stage 1 & Stage 2)
     // Signal flow: Plaits -> Stage1 -> Stage2 -> Filter -> Output
     // ======================================================================
-    int filter_mode = filter_params_[FILTER_MODE].GetIndex();
+    int filter_mode = filter_params_[filter::MODE].GetIndex();
     if (filter_mode > 0) {
       // Set filter mode (maps our 1-6 to DaisySP's enum)
       static const daisysp::LadderFilter::FilterMode mode_map[] = {
@@ -1193,7 +722,7 @@ void PlaitsPort::Process(float **in, float **out, size_t size) {
 
       // Calculate cutoff frequency with key tracking and envelope modulation
       // Base frequency: 20Hz to 20kHz (log scaled from 0-1 parameter)
-      float freq_param = filter_params_[FILTER_FREQ].value;
+      float freq_param = filter_params_[filter::FREQ].value;
 
       // Cache base frequency calculation (avoid expensive powf every block)
       if (freq_param != last_filter_freq_param_) {
@@ -1205,7 +734,7 @@ void PlaitsPort::Process(float **in, float **out, size_t size) {
 
       // Key tracking: 0-100% of note pitch applied to cutoff
       // Reference: C4 (MIDI 60) = no shift, each octave up doubles freq
-      float tracking = filter_params_[FILTER_TRACK].value;
+      float tracking = filter_params_[filter::TRACK].value;
       float note_offset = (patch_->note - 60.0f) / 12.0f; // Octaves from C4
       float tracking_multiplier = powf(2.0f, note_offset * tracking);
 
@@ -1213,10 +742,10 @@ void PlaitsPort::Process(float **in, float **out, size_t size) {
       // attenuverter controls how much LPG envelope modulates cutoff
       // Range: attenuverter -1 to +1 maps to -4 to +4 octaves of env modulation
       float env_mod_amount = 0.0f;
-      if (!filter_params_[FILTER_FREQ].mapping.IsCVSource() ||
-          !filter_params_[FILTER_FREQ].mapping.plugged) {
+      if (!filter_params_[filter::FREQ].mapping.IsCVSource() ||
+          !filter_params_[filter::FREQ].mapping.plugged) {
         // No CV plugged: use attenuverter for envelope modulation
-        env_mod_amount = filter_params_[FILTER_FREQ].mapping.attenuverter;
+        env_mod_amount = filter_params_[filter::FREQ].mapping.attenuverter;
       }
       float env_mod_multiplier = powf(2.0f, lpg_gain * env_mod_amount * 4.0f);
 
@@ -1227,11 +756,11 @@ void PlaitsPort::Process(float **in, float **out, size_t size) {
 
       // Resonance: 0-1 parameter maps to 0-1.8 (DaisySP max for
       // self-oscillation)
-      float reso = filter_params_[FILTER_RESO].value * 1.8f;
+      float reso = filter_params_[filter::RESO].value * 1.8f;
       filter_.SetRes(reso);
 
       // Drive: 0-1 parameter maps to 0-4 (DaisySP range)
-      float drive = filter_params_[FILTER_DRIVE].value * 4.0f;
+      float drive = filter_params_[filter::DRIVE].value * 4.0f;
       filter_.SetInputDrive(drive);
 
       // Apply filter to wet outputs (OUT and AUX)
@@ -1264,7 +793,7 @@ void PlaitsPort::Process(float **in, float **out, size_t size) {
                             cv_inputs_);
 
     // Gate Output processing
-    int gate_out_mode = gate_out_params_[GATEOUT_MODE].GetIndex();
+    gate_out_mode = gate_out_params_[gate_out::MODE].GetIndex();
 
     // EndEnv mode (1): detect when envelope ends (lpg_gain drops below
     // threshold)
@@ -1278,8 +807,8 @@ void PlaitsPort::Process(float **in, float **out, size_t size) {
       prev_lpg_gain_ = lpg_gain;
     }
 
-    // Countdown trigger pulse for modes that use it (Trigger, EndEnv, TrigProb,
-    // ClkDiv, ClkProb)
+    // Countdown trigger pulse for modes that use it (Trigger, EndEnv,
+    // TrigProb, ClkDiv, ClkProb)
     if (gate_out_trigger_counter_ > 0) {
       if (gate_out_trigger_counter_ > block_size) {
         gate_out_trigger_counter_ -= block_size;
@@ -1294,10 +823,11 @@ void PlaitsPort::Process(float **in, float **out, size_t size) {
         midi_velocity_ * params_[8].mapping.velocity_amount; // Volume parameter
     float volume = std::clamp(params_[8].value + vol_vel, 0.0f, 1.0f);
 
-    // Convert from short to float, apply volume, and copy to outputs
-    // OUT (wet) -> channel 1, AUX (wet) -> channel 2
-    // OUT_DRY -> channel 3, AUX_DRY -> channel 4
+    // Convert from short to float, apply velocity and volume separately, copy
+    // to outputs OUT (wet) -> channel 1, AUX (wet) -> channel 2 OUT_DRY ->
+    // channel 3, AUX_DRY -> channel 4
     for (size_t j = 0; j < block_size && (i + j) < size; j++) {
+      // Apply velocity for amplitude control, then volume for final level
       float out_sample =
           (static_cast<float>(frames[j].out) / kAudioScaleInt16) * volume;
       float aux_sample =
@@ -1319,10 +849,18 @@ mutables_ui::Parameter *PlaitsPort::GetParameters() { return params_.data(); }
 size_t PlaitsPort::GetParameterCount() const { return params_.size(); }
 
 void PlaitsPort::ProcessGate(int gate_index, bool state) {
-  if (gate_index == 0) { // Gate 1 (Trig)
+
+  // Handle Gate 1 input for Trig mode
+  if (gate_index == 0) {
+    gate_state_ = state;
+
     // Rising edge detection
     if (state && !previous_gate_) {
-      int gate_out_mode = gate_out_params_[GATEOUT_MODE].GetIndex();
+      // Trigger internal voices
+      cv_modulator_1_.Trigger();
+      cv_modulator_2_.Trigger();
+
+      int gate_out_mode = gate_out_params_[gate_out::MODE].GetIndex();
 
       if (gate_out_mode == 0) { // Trig
         // Pass through Gate 1 (or OR with MIDI)
@@ -1331,27 +869,24 @@ void PlaitsPort::ProcessGate(int gate_index, bool state) {
             static_cast<uint32_t>(sample_rate_ * kTriggerDurationS);
       } else if (gate_out_mode == 2) { // TrigPrb
         // Probability check
-        float prob = gate_out_params_[GATEOUT_PROB].value;
+        float prob = gate_out_params_[gate_out::PROB].value;
         if (static_cast<float>(rand()) / static_cast<float>(RAND_MAX) < prob) {
           gate_out_state_ = true;
           gate_out_trigger_counter_ =
               static_cast<uint32_t>(sample_rate_ * kTriggerDurationS);
         }
       }
-
-      // Trigger internal voices
-      // For monophonic, we can trigger modulators here if desired,
-      // but typically they are triggered in the main Process loop or via
-      // midi_gate logic. However, to ensure responsiveness...
-      cv_modulator_1_.Trigger();
-      cv_modulator_2_.Trigger();
     }
+
     previous_gate_ = state;
-  } else if (gate_index == 1) { // Gate 2 (Clock)
-    // Update Gate 2 clock tracker
-    if (state) {
-      // gate2_clock_tracker_.OnClock(sample_counter_); // GateClockTracker
-      // doesn't use OnClock, it uses Process
+  }
+
+  // Handle Gate 2 input for ClkDiv/ClkPrb modes
+  if (gate_index == 1) {
+    // Update clock tracker with current state and timestamp
+    gate2_clock_tracker_.Process(state, sample_counter_);
+
+    if (gate2_clock_tracker_.IsActive(sample_counter_, sample_rate_)) {
       gate2_clock_hz_ = gate2_clock_tracker_.GetClockHz(sample_rate_);
     } else {
       gate2_clock_hz_ = 0.0f;
@@ -1360,13 +895,15 @@ void PlaitsPort::ProcessGate(int gate_index, bool state) {
     if (state && !previous_gate2_) {
       // Gate 2 rising edge logic...
 
-      int gate_out_mode = gate_out_params_[GATEOUT_MODE].GetIndex();
+      int gate_out_mode = gate_out_params_[gate_out::MODE].GetIndex();
 
       if (gate_out_mode == 3) { // ClkDiv
-        int divider_idx = gate_out_params_[GATEOUT_CLK_DIV].GetIndex();
+        int divider_idx = gate_out_params_[gate_out::CLK_DIV].GetIndex();
         // Constants are in 24 PPQ (MIDI), but analog clock is 1 pulse per step.
         // So we divide by 24 to get the pulse count.
-        int divider = clk_div_values[divider_idx] / 24;
+        // /1 (24) -> 1 pulse
+        // /2 (48) -> 2 pulses
+        int divider = gate_out::kClkDivValues[divider_idx] / 24;
         if (divider < 1)
           divider = 1;
 
@@ -1381,7 +918,7 @@ void PlaitsPort::ProcessGate(int gate_index, bool state) {
 
       } else if (gate_out_mode == 4) { // ClkPrb
         // Probability check on clock tick
-        float prob = gate_out_params_[GATEOUT_PROB].value;
+        float prob = gate_out_params_[gate_out::PROB].value;
         if (static_cast<float>(rand()) / static_cast<float>(RAND_MAX) < prob) {
           gate_out_state_ = true;
           gate_out_trigger_counter_ =
@@ -1391,152 +928,154 @@ void PlaitsPort::ProcessGate(int gate_index, bool state) {
     }
     previous_gate2_ = state;
   }
-  // Store gate state for internal voice
-  if (gate_index == 0) {
-    gate_state_ = state;
-  }
-}
-
-float PlaitsPort::GetCVOutput(int cv_index) {
-  if (cv_index == 0) {
-    return cv_modulator_1_.GetOutput();
-  } else if (cv_index == 1) {
-    return cv_modulator_2_.GetOutput();
-  }
-  return 0.0f;
 }
 
 void PlaitsPort::UpdateCVModulatorsFromParams() {
-  // Update CV modulator 1 from its params
+  // Update CV modulator 1 from  // CV Out 1
   cv_modulator_1_.SetMode(
-      static_cast<CVOutMode>(cv_out1_params_[CVOUT_MODE].GetIndex()));
-  cv_modulator_1_.SetAttack(cv_out1_params_[CVOUT_ATTACK].value);
-  cv_modulator_1_.SetRelease(cv_out1_params_[CVOUT_RELEASE].value);
+      static_cast<CVOutMode>(cv_out1_params_[cv_out::MODE].GetIndex()));
+  cv_modulator_1_.SetAttack(cv_out1_params_[cv_out::ATTACK].value);
+  cv_modulator_1_.SetRelease(cv_out1_params_[cv_out::RELEASE].value);
   cv_modulator_1_.SetLFOShape(
-      static_cast<LFOShape>(cv_out1_params_[CVOUT_SHAPE].GetIndex()));
-  cv_modulator_1_.SetSlewAmount(cv_out1_params_[CVOUT_SLEW].value);
+      static_cast<LFOShape>(cv_out1_params_[cv_out::SHAPE].GetIndex()));
+  cv_modulator_1_.SetSlewAmount(cv_out1_params_[cv_out::SLEW].value);
   cv_modulator_1_.SetSHSource(
-      static_cast<SHSource>(cv_out1_params_[CVOUT_SH_SRC].GetIndex()));
+      static_cast<SHSource>(cv_out1_params_[cv_out::SH_SRC].GetIndex()));
   cv_modulator_1_.SetSyncMode(
-      static_cast<SyncMode>(cv_out1_params_[CVOUT_SYNC].GetIndex()));
-  cv_modulator_1_.SetRate(cv_out1_params_[CVOUT_RATE].value);
-  cv_modulator_1_.SetRetrig(cv_out1_params_[CVOUT_RETRIG].GetIndex() == 1);
-  cv_modulator_1_.SetAmp(cv_out1_params_[CVOUT_AMP].value);
-  cv_modulator_1_.SetPhaseOffset(cv_out1_params_[CVOUT_PHASE].value);
-  cv_modulator_1_.SetFollowScale3(cv_out1_params_[CVOUT_SCALE3].value *
-                                  2.0f); // 0-1 -> 0-2x
-  cv_modulator_1_.SetFollowScale4(cv_out1_params_[CVOUT_SCALE4].value *
-                                  2.0f); // 0-1 -> 0-2x
+      static_cast<SyncMode>(cv_out1_params_[cv_out::SYNC].GetIndex()));
+  cv_modulator_1_.SetRate(cv_out1_params_[cv_out::RATE].value);
+  cv_modulator_1_.SetRetrig(cv_out1_params_[cv_out::RETRIG].GetIndex() == 1);
+  cv_modulator_1_.SetAmp(cv_out1_params_[cv_out::AMP].value);
+  cv_modulator_1_.SetPhaseOffset(cv_out1_params_[cv_out::PHASE].value);
+  cv_modulator_1_.SetFollowScale3(cv_out1_params_[cv_out::SCALE3].value * 2.0f);
+  cv_modulator_1_.SetFollowScale4(cv_out1_params_[cv_out::SCALE4].value * 2.0f);
 
-  // Update CV modulator 2 from its params
+  // CV Out 2
   cv_modulator_2_.SetMode(
-      static_cast<CVOutMode>(cv_out2_params_[CVOUT_MODE].GetIndex()));
-  cv_modulator_2_.SetAttack(cv_out2_params_[CVOUT_ATTACK].value);
-  cv_modulator_2_.SetRelease(cv_out2_params_[CVOUT_RELEASE].value);
+      static_cast<CVOutMode>(cv_out2_params_[cv_out::MODE].GetIndex()));
+  cv_modulator_2_.SetAttack(cv_out2_params_[cv_out::ATTACK].value);
+  cv_modulator_2_.SetRelease(cv_out2_params_[cv_out::RELEASE].value);
   cv_modulator_2_.SetLFOShape(
-      static_cast<LFOShape>(cv_out2_params_[CVOUT_SHAPE].GetIndex()));
-  cv_modulator_2_.SetSlewAmount(cv_out2_params_[CVOUT_SLEW].value);
+      static_cast<LFOShape>(cv_out2_params_[cv_out::SHAPE].GetIndex()));
+  cv_modulator_2_.SetSlewAmount(cv_out2_params_[cv_out::SLEW].value);
   cv_modulator_2_.SetSHSource(
-      static_cast<SHSource>(cv_out2_params_[CVOUT_SH_SRC].GetIndex()));
+      static_cast<SHSource>(cv_out2_params_[cv_out::SH_SRC].GetIndex()));
   cv_modulator_2_.SetSyncMode(
-      static_cast<SyncMode>(cv_out2_params_[CVOUT_SYNC].GetIndex()));
-  cv_modulator_2_.SetRate(cv_out2_params_[CVOUT_RATE].value);
-  cv_modulator_2_.SetRetrig(cv_out2_params_[CVOUT_RETRIG].GetIndex() == 1);
-  cv_modulator_2_.SetAmp(cv_out2_params_[CVOUT_AMP].value);
-  cv_modulator_2_.SetPhaseOffset(cv_out2_params_[CVOUT_PHASE].value);
-  cv_modulator_2_.SetFollowScale3(cv_out2_params_[CVOUT_SCALE3].value *
-                                  2.0f); // 0-1 -> 0-2x
-  cv_modulator_2_.SetFollowScale4(cv_out2_params_[CVOUT_SCALE4].value *
+      static_cast<SyncMode>(cv_out2_params_[cv_out::SYNC].GetIndex()));
+  cv_modulator_2_.SetRate(cv_out2_params_[cv_out::RATE].value);
+  cv_modulator_2_.SetRetrig(cv_out2_params_[cv_out::RETRIG].GetIndex() == 1);
+  cv_modulator_2_.SetAmp(cv_out2_params_[cv_out::AMP].value);
+  cv_modulator_2_.SetPhaseOffset(cv_out2_params_[cv_out::PHASE].value);
+  cv_modulator_2_.SetFollowScale3(cv_out2_params_[cv_out::SCALE3].value * 2.0f);
+  cv_modulator_2_.SetFollowScale4(cv_out2_params_[cv_out::SCALE4].value *
                                   2.0f); // 0-1 -> 0-2x
 }
 
+// Helper function to update audio env processor from parameters
 void PlaitsPort::UpdateAudioEnvFromParams(
     AudioEnvProcessor &processor,
     std::array<mutables_ui::Parameter, kNumAudioInParams> &params) {
   // Update audio envelope processor from its params
-  int mode = params[AUDIOIN_MODE].GetIndex();
+  int mode = params[audio_in::MODE].GetIndex();
   processor.SetMode(static_cast<AudioEnvMode>(mode));
 
   // Input gain (normalized 0-1 -> 1x-10x for line level signals)
-  processor.SetGainNormalized(params[AUDIOIN_GAIN].value);
+  // params[1] is Gain (0-1). Map to 1.0 - 10.0 (0-20dB)
+  // Or linear gain. Let's assume 1.0 + 9.0 * value
+  float gain = 1.0f + 9.0f * params[audio_in::GAIN].value;
+  processor.SetGainNormalized(params[audio_in::GAIN].value);
+  processor.SetGain(gain);
 
   // Modulation amounts (bipolar -1 to +1)
-  processor.SetTimbreAmount(params[AUDIOIN_TIMBRE_AMT].value);
-  processor.SetMorphAmount(params[AUDIOIN_MORPH_AMT].value);
+  processor.SetTimbreAmount(params[audio_in::TIMBRE_AMT].value);
+  processor.SetMorphAmount(params[audio_in::MORPH_AMT].value);
 
   // Envelope follower params (normalized 0-1, internally converted to
   // log-scaled ms)
-  processor.SetAttack(params[AUDIOIN_ATTACK].value);
-  processor.SetRelease(params[AUDIOIN_RELEASE].value);
+  // Map 0-1 to reasonable times (10ms to 2s)
+  // Attack: 0.5ms to 200ms
+  processor.SetAttack(params[audio_in::ATTACK].value);
+  processor.SetRelease(params[audio_in::RELEASE].value);
 
   // Transient detector params
-  processor.SetThreshold(params[AUDIOIN_THRESHOLD].value);
-  processor.SetHoldoff(params[AUDIOIN_HOLDOFF].value);
+  processor.SetThreshold(params[audio_in::THRESHOLD].value);
+  processor.SetHoldoff(params[audio_in::HOLDOFF].value);
 }
 
 void PlaitsPort::OnMIDIClock() {
   midi_clock_tracker_.OnClock(sample_counter_);
-  // Update clock Hz for modulators
-  if (midi_clock_tracker_.IsActive(sample_counter_, sample_rate_)) {
-    midi_clock_hz_ = midi_clock_tracker_.GetClockHz(sample_rate_);
-  } else {
-    midi_clock_hz_ = 0.0f;
+  float freq = midi_clock_tracker_.GetClockHz(sample_rate_);
+  if (freq > 0.0f) {
+    midi_clock_hz_ = freq;
   }
 
-  // Gate Output clock modes (MIDI clock has priority over Gate 2)
-  int gate_out_mode = gate_out_params_[GATEOUT_MODE].GetIndex();
-  if (gate_out_mode == 3) { // ClkDiv mode
+  // Handle Gate Out ClkDiv mode (MIDI clock source)
+  int gate_out_mode = gate_out_params_[gate_out::MODE].GetIndex();
+
+  if (gate_out_mode == 3) {  // ClkDiv
+    int main_clock_ppq = 24; // MIDI clock is 24 PPQ
+    int divider_idx = gate_out_params_[gate_out::CLK_DIV].GetIndex();
+    int divider = gate_out::kClkDivValues[divider_idx];
+
+    // With 24 PPQ input, we output a pulse every 'divider' ticks?
+    // No, clk_div_values are in 1/96 notes (standard internal) or something.
+    // 24 = quarter note. 6 = 16th note.
+    // If we receive 24 ticks per beat, and we want 16ths (4 per beat), we
+    // trigger every 6 ticks.
+
+    // Let's simplified this:
+    // clock_div_counter_ increments on every clock tick.
+    // If (clock_div_counter_ % (divider / 4)) == 0 -> Trigger?
+    // Assuming divider values are relative to 96ppq standard which is common
+    // in Plaits. MIDI is 24ppq. So we divide values by 4.
+
+    int ticks_per_pulse = divider / 4;
+    if (ticks_per_pulse < 1)
+      ticks_per_pulse = 1;
+
     clock_div_counter_++;
-    int divider = clk_div_values[gate_out_params_[GATEOUT_CLK_DIV].GetIndex()];
-    if (clock_div_counter_ >= divider) {
+    if (clock_div_counter_ >= ticks_per_pulse) {
       clock_div_counter_ = 0;
       gate_out_state_ = true;
-      gate_out_trigger_counter_ = static_cast<uint32_t>(
-          sample_rate_ * kTriggerDurationS); // 10ms trigger
+      gate_out_trigger_counter_ = kBlockSize / 2;
     }
-  } else if (gate_out_mode == 4) { // ClkProb mode - trigger on each MIDI clock
-                                   // tick with probability
-    float prob = gate_out_params_[GATEOUT_PROB].value;
-    float rand_val = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
-    if (rand_val < prob) {
+
+  } else if (gate_out_mode == 4) { // ClkPrb
+    // Probability check on clock tick
+    float prob = gate_out_params_[gate_out::PROB].value;
+    if (static_cast<float>(rand()) / static_cast<float>(RAND_MAX) < prob) {
       gate_out_state_ = true;
-      gate_out_trigger_counter_ =
-          static_cast<uint32_t>(sample_rate_ * kTriggerDurationS);
+      gate_out_trigger_counter_ = kBlockSize / 4;
     }
   }
 }
 
 void PlaitsPort::UpdateSampleCounter(size_t samples) {
+  // Tracker processing is usually done per sample or block, but here we just
+  // update counter If trackers need per-block update, check their
+  // implementation. Based on error: GateClockTracker::Process(bool gate,
+  // uint32_t t) needs checking gate state. We handle GateClockTracker in
+  // ProcessGate per sample/block usually. But MIDIClock tracker might not
+  // need explicit Process per sample if we just call OnClock.
+
   sample_counter_ += samples;
 }
 
 void PlaitsPort::NoteOn(uint8_t note, uint8_t velocity) {
-  float vel_normalized = static_cast<float>(velocity) / 127.0f;
-
-  // V/Oct and MIDI pitch are mutually exclusive
-  // If V/Oct is mapped to a CV input, ignore MIDI note pitch
-  // (MIDI clock and other messages still work, and all messages pass to MIDI
-  // out)
-  if (!params_[7].mapping.IsCVSource()) {
-    midi_note_ = static_cast<float>(note);
-  }
-  midi_velocity_ = vel_normalized;
+  midi_note_ = note;
+  midi_velocity_ = velocity / 127.0f;
   midi_gate_ = true;
 
-  // Trigger CV modulators (for AD envelopes and LFO retrig)
-  cv_modulator_1_.Trigger();
-  cv_modulator_2_.Trigger();
-
-  // Gate Output: Trigger and TrigProb modes respond to MIDI note on
-  int gate_out_mode = gate_out_params_[GATEOUT_MODE].GetIndex();
-  if (gate_out_mode == 0) { // Trigger mode
+  // Handle Gate Out trigger for MIDI notes
+  int gate_out_mode = gate_out_params_[gate_out::MODE].GetIndex();
+  if (gate_out_mode == 0) { // Trig
     gate_out_state_ = true;
     gate_out_trigger_counter_ =
-        static_cast<uint32_t>(sample_rate_ * kTriggerDurationS); // 10ms trigger
-  } else if (gate_out_mode == 2) { // TrigProb mode
-    float prob = gate_out_params_[GATEOUT_PROB].value;
-    float rand_val = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
-    if (rand_val < prob) {
+        static_cast<uint32_t>(sample_rate_ * kTriggerDurationS);
+  } else if (gate_out_mode == 2) { // TrigPrb
+    // Probability check
+    float prob = gate_out_params_[gate_out::PROB].value;
+    if (static_cast<float>(rand()) / static_cast<float>(RAND_MAX) < prob) {
       gate_out_state_ = true;
       gate_out_trigger_counter_ =
           static_cast<uint32_t>(sample_rate_ * kTriggerDurationS);
@@ -1545,25 +1084,47 @@ void PlaitsPort::NoteOn(uint8_t note, uint8_t velocity) {
 }
 
 void PlaitsPort::NoteOff(uint8_t note, uint8_t velocity) {
-  (void)velocity;
-
-  // Monophonic handling
-  if (!params_[7].mapping.IsCVSource()) {
-    if (static_cast<uint8_t>(midi_note_) == note) {
-      midi_gate_ = false;
-    }
-  } else {
-    // V/Oct mode: always release gate on any note off
+  if (midi_note_ == note) {
     midi_gate_ = false;
   }
 }
 
 void PlaitsPort::AllNotesOff() { midi_gate_ = false; }
 
-void PlaitsPort::Panic() { midi_gate_ = false; }
+void PlaitsPort::Panic() {
+  AllNotesOff();
+  // Reset engines?
+}
+
+float PlaitsPort::GetCVOutput(int cv_index) {
+  // We need to pass the current environment state to the modulators
+  // These values should likely be members updated in Process(), but for now
+  // we pass approximations or last known values. Ideally, these Process()
+  // calls should happen in the main Process loop and we just return the
+  // stored output here to avoid re-calculation or missing state.
+
+  // Actually, checking CVModulator logic: it needs lpg_gain, midi_clock_hz,
+  // gate2_clock_hz, and cv_values. We should update the modulators in
+  // `Process()` and store the result, or pass the values here. But
+  // GetCVOutput is called by the main loop which might expect it to compute.
+
+  float lpg_envelope_ =
+      voice_->GetDecayEnvelope(); // Assuming we want the envelope here
+
+  // Note: We don't have easy access to lpg_gain here unless we store it.
+  // Let's assume standard behavior:
+
+  if (cv_index == 0)
+    return cv_modulator_1_.Process(lpg_envelope_, midi_clock_hz_,
+                                   gate2_clock_hz_, nullptr);
+  if (cv_index == 1)
+    return cv_modulator_2_.Process(lpg_envelope_, midi_clock_hz_,
+                                   gate2_clock_hz_, nullptr);
+  return 0.0f;
+}
 
 bool PlaitsPort::GetGateOutput() const {
-  int mode = gate_out_params_[GATEOUT_MODE].GetIndex();
+  int mode = gate_out_params_[gate_out::MODE].GetIndex();
 
   switch (mode) {
   case 0: // Trigger - Gate 1 rise OR MIDI note on
