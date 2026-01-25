@@ -7,7 +7,8 @@ SRCS = test_main.cpp \
        test_menu_state.cpp \
        test_format_utils.cpp \
        test_cv_mapping.cpp \
-       test_midi_processor.cpp
+       test_midi_processor.cpp \
+       test_parameter_templates.cpp
 
 OBJS = $(SRCS:.cpp=.o)
 

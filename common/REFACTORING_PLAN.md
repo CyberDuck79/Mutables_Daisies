@@ -1,7 +1,7 @@
 # Common Library Refactoring Plan
 
 **Created:** 2026-01-24  
-**Status:** Planning  
+**Status:** Completed. Verified with `test_parameter_templates.cpp`.  
 **Goal:** Move UI and parameter-related responsibilities from `plaits/main.cpp` and `plaits/plaits_port.cpp` to the common library for reusability across future module ports.
 
 ---
