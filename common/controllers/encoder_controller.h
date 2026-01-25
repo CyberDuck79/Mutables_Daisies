@@ -23,7 +23,8 @@ struct EncoderCallbacks {
   std::function<void(Parameter *, int)>
       on_user_data_selected; // param, file_index
   std::function<void(const char *, const char *)>
-      on_display_message; // title, message
+      on_display_message;               // title, message
+  std::function<int()> on_scan_presets; // Returns count
 };
 
 class EncoderController {
@@ -114,7 +115,7 @@ public:
                         params);
       break;
     case UIState::CharInput:
-      HandleCharInput(hw.increment, short_press, menu);
+      HandleCharInput(hw.increment, short_press, long_press_detected, menu);
       break;
     case UIState::PresetList:
       HandlePresetList(hw.increment, short_press, menu);
@@ -157,14 +158,18 @@ private:
     }
 
     Parameter *current_params = GetActiveParams(menu, params);
-    // Safety check
-    if (menu.selected_param < 0)
+    // Safety check: if invalid index AND NOT Title (which is -1)
+    bool title_selected = menu.IsInSub() && menu.IsSubTitleSelected();
+
+    if (menu.selected_param < 0 && !title_selected)
       return; // Should be handled by Next/Prev, but just in case
+
+    // Note: If title_selected is true, menu.selected_param IS -1 (or should be
+    // treated as valid for exit)
 
     // Special case: Title selected in Sub (index -1 in sub_child_selected)
     // If IsSubTitleSelected, we are technically not on a param for editing
     // purposes.
-    bool title_selected = menu.IsInSub() && menu.IsSubTitleSelected();
 
     if (short_press) {
       if (title_selected) {
@@ -184,25 +189,25 @@ private:
         if (param.IsEditable()) {
           menu.state = UIState::EditValue;
         } else if (param.type == ParamType::SAVE) {
-          if (callbacks_.on_save_preset)
-            callbacks_.on_save_preset();
+          // Enter Char Input Mode
+          // We just transition state. The caller should implement
+          // 'on_save_preset' which is called ONLY after char input
+          // confirmation. However, we need to ensure SD is available? Ideally
+          // we check before entering. But we don't have IsSDAvailable here.
+          // We'll enter gracefully. If save fails later, it fails.
+          // Or we could have a "CanSave" callback?
+          // Let's assume we can enter.
+          menu.EnterCharInput();
         } else if (param.type == ParamType::LOAD) {
-          // Logic for scanning is outside, callback triggers it and gets count?
-          // Wrapper usually does: count = Scan();
-          // controller->EnterPresetList(count); So we call callback, which
-          // should call menu.EnterPresetList... Wait, callback should return
-          // count? Or callback does the job? Main.cpp: count = manager.Scan();
-          // menu.EnterPresetList(count); Let's pass the responsibility to
-          // callback to call EnterPresetList on the menu? No, controller
-          // shouldn't depend on "manager". Callback: on_load_preset(int) ->
-          // this is weird. Better: callback returning count? Let's assume
-          // callback takes a lambda or simply performs the action and updates
-          // menu if needed. Actually, for cleaner separation: Controller Logic
-          // says "User wants to load". Callback executes "Scan presets". Then
-          // who calls EnterPresetList? Let's let the callback handle the UI
-          // state change if it involves IO.
-          if (callbacks_.on_load_preset)
-            callbacks_.on_load_preset(0); // Arg might be unused or context
+          if (callbacks_.on_scan_presets) {
+            int count = callbacks_.on_scan_presets();
+            if (count > 0) {
+              menu.EnterPresetList(count);
+            } else {
+              if (callbacks_.on_display_message)
+                callbacks_.on_display_message("Error", "No presets");
+            }
+          }
         } else if (param.type == ParamType::SUB) {
           if (param.children && param.child_count > 0) {
             menu.EnterSub(&param, menu.selected_param);
@@ -275,7 +280,18 @@ private:
         param.mapping.plugged = !param.mapping.plugged;
         if (param.mapping.plugged) {
           // We need access to CV inputs to sample current value?
-          // main.cpp: param.mapping.offset = cv_inputs.GetFiltered(cv_idx);
+          // Used GetLastCV from processor
+          int cv_idx = param.mapping.GetCVIndex();
+          if (cv_idx >= 0) {
+            param.mapping.offset = cv_processor_.GetLastCV(cv_idx);
+            // Initialize held_cv for S&H params to avoid jump
+            if (param.sample_and_hold) {
+              // S&H of Index: Calculate initial index using Offset (Delta=0)
+              int initial_idx = CVMappingProcessor::CalculateEnumFromCV(
+                  param, param.mapping.offset);
+              param.held_cv = static_cast<float>(initial_idx);
+            }
+          }
           // We don't have cv_inputs here directly yet.
           // We passed cv_processor_ in constructor, maybe it can provide it?
           // Or we just skip the "Snapping" for now or add a method to
@@ -322,8 +338,10 @@ private:
           cv_processor_.RebuildCache(params, param_count_);
         }
         // ... etc for Attenuverter (3), Velocity (4)
-        if (item == 3 && (param.mapping.IsCVSource() ||
-                          param.mapping.source == MappingSource::CC)) {
+        if (item == 3) {
+          // Attenuverter (always editable)
+          // Was: && (param.mapping.IsCVSource() || param.mapping.source ==
+          // MappingSource::CC)
           param.mapping.attenuverter =
               std::clamp(param.mapping.attenuverter + inc * 0.05f, -1.0f, 1.0f);
         }
@@ -352,20 +370,31 @@ private:
     }
   }
 
-  void HandleCharInput(int inc, bool short_press, MenuState &menu) {
+  void HandleCharInput(int inc, bool short_press, bool long_press,
+                       MenuState &menu) {
     if (inc > 0)
       menu.NextChar();
     if (inc < 0)
       menu.PrevChar();
 
     if (short_press) {
-      bool cont = menu.ConfirmChar();
-      if (!cont) {
-        // Finished
-        if (callbacks_.on_save_preset)
-          callbacks_.on_save_preset(); // Actually execute save
-        menu.ExitCharInput();          // Transitions to Navigate
+      if (menu.char_title_selected) {
+        // Exit without saving
+        menu.ExitCharInput();
+      } else {
+        bool cont = menu.ConfirmChar();
+        if (!cont) {
+          // Finished
+          if (callbacks_.on_save_preset)
+            callbacks_.on_save_preset(); // Actually execute save
+          menu.ExitCharInput();          // Transitions to Navigate
+        }
       }
+    } else if (long_press) {
+      // Fast Save
+      if (callbacks_.on_save_preset)
+        callbacks_.on_save_preset();
+      menu.ExitCharInput();
     }
   }
 

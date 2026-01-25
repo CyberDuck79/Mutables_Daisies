@@ -412,11 +412,11 @@ TEST(EncoderController, CycleMappingSourceSkipsGateForKnob)
 
 **Status:** Completed. Verified with `test_encoder_controller.cpp`.
 
-### Phase 6: Update main.cpp
+### Phase 6: Update main.cpp (Completed)
 
-**Goal:** Use new common components
+**Goal:** Integrate into firmware
 
-**Changes:**
+**Status:** Completed. Integrated `CVMappingProcessor`, `MIDIProcessor`, `EncoderController` into `plaits/main.cpp`. Removed legacy handlers. Verified with common tests.
 1. Replace inline CV processing with `CVMappingProcessor`
 2. Replace inline encoder handling with `EncoderController`
 3. Replace CC storage with `MIDIProcessor`
