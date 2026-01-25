@@ -1086,7 +1086,7 @@ void PlaitsPort::UpdateCVModulatorsFromParams() {
   cv_modulator_1_.SetMode(
       static_cast<CVOutMode>(cv_out1_params_[cv_out::MODE].GetIndex()));
   cv_modulator_1_.SetAttack(cv_out1_params_[cv_out::ATTACK].value);
-  cv_modulator_1_.SetRelease(cv_out1_params_[cv_out::RELEASE].value);
+  cv_modulator_1_.SetRelease(cv_out1_params_[cv_out::ENV_RELEASE].value);
   cv_modulator_1_.SetLFOShape(
       static_cast<LFOShape>(cv_out1_params_[cv_out::SHAPE].GetIndex()));
   cv_modulator_1_.SetSlewAmount(cv_out1_params_[cv_out::SLEW].value);
@@ -1105,7 +1105,7 @@ void PlaitsPort::UpdateCVModulatorsFromParams() {
   cv_modulator_2_.SetMode(
       static_cast<CVOutMode>(cv_out2_params_[cv_out::MODE].GetIndex()));
   cv_modulator_2_.SetAttack(cv_out2_params_[cv_out::ATTACK].value);
-  cv_modulator_2_.SetRelease(cv_out2_params_[cv_out::RELEASE].value);
+  cv_modulator_2_.SetRelease(cv_out2_params_[cv_out::ENV_RELEASE].value);
   cv_modulator_2_.SetLFOShape(
       static_cast<LFOShape>(cv_out2_params_[cv_out::SHAPE].GetIndex()));
   cv_modulator_2_.SetSlewAmount(cv_out2_params_[cv_out::SLEW].value);
@@ -1146,7 +1146,7 @@ void PlaitsPort::UpdateAudioEnvFromParams(
   // Map 0-1 to reasonable times (10ms to 2s)
   // Attack: 0.5ms to 200ms
   processor.SetAttack(params[audio_in::ATTACK].value);
-  processor.SetRelease(params[audio_in::RELEASE].value);
+  processor.SetRelease(params[audio_in::ENV_RELEASE].value);
 
   // Transient detector params
   processor.SetThreshold(params[audio_in::THRESHOLD].value);
@@ -1231,6 +1231,15 @@ void PlaitsPort::NoteOn(uint8_t note, uint8_t velocity) {
       gate_out_trigger_counter_ =
           static_cast<uint32_t>(sample_rate_ * kTriggerDurationS);
     }
+  }
+
+  // Delegate to voice manager for polyphony
+  if (voice_manager_.IsPolyphonyEnabled()) {
+    voice_manager_.NoteOn(note, midi_velocity_, [&](int i) {
+      if (i == 0)
+        return voice_->GetDecayEnvelope();
+      return poly_voices_[i - 1]->GetDecayEnvelope();
+    });
   }
 }
 

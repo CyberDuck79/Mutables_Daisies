@@ -20,7 +20,7 @@ enum ParamIndex {
   TIMBRE_AMT = 2,
   MORPH_AMT = 3,
   ATTACK = 4,
-  RELEASE = 5,
+  ENV_RELEASE = 5,
   THRESHOLD = 6,
   HOLDOFF = 7
 };
@@ -43,7 +43,7 @@ static bool VisibilityCallback(const Parameter *siblings, uint8_t sibling_count,
   case TIMBRE_AMT:
   case MORPH_AMT:
   case ATTACK:
-  case RELEASE:
+  case ENV_RELEASE:
     return (mode == 1); // ENV
   case THRESHOLD:
   case HOLDOFF:
@@ -74,7 +74,7 @@ static void FormatCallback(const Parameter *param, const Parameter *siblings,
   case ATTACK:
     format::FormatAttackTime(buffer, buffer_size, value);
     break;
-  case RELEASE:
+  case ENV_RELEASE:
     format::FormatReleaseTime(buffer, buffer_size, value);
     break;
   case THRESHOLD:
@@ -107,7 +107,7 @@ template <typename ParamArray> void Setup(ParamArray &params) {
   params[TIMBRE_AMT] = Parameter::Knob("Tim. Mod", -1.0f, 1.0f, 0.0f);
   params[MORPH_AMT] = Parameter::Knob("Mrph Mod", -1.0f, 1.0f, 0.0f);
   params[ATTACK] = Parameter::Knob("Attack", 0.0f, 1.0f, 0.1f);
-  params[RELEASE] = Parameter::Knob("Release", 0.0f, 1.0f, 0.3f);
+  params[ENV_RELEASE] = Parameter::Knob("Release", 0.0f, 1.0f, 0.3f);
   params[THRESHOLD] = Parameter::Knob("Thresh", 0.0f, 1.0f, 0.3f);
   params[HOLDOFF] = Parameter::Knob("Holdoff", 0.0f, 1.0f, 0.2f);
 
@@ -115,7 +115,7 @@ template <typename ParamArray> void Setup(ParamArray &params) {
   params[TIMBRE_AMT].format_callback = BipolarFormatCallback;
   params[MORPH_AMT].format_callback = BipolarFormatCallback;
   params[ATTACK].format_callback = FormatCallback;
-  params[RELEASE].format_callback = FormatCallback;
+  params[ENV_RELEASE].format_callback = FormatCallback;
   params[THRESHOLD].format_callback = FormatCallback;
   params[HOLDOFF].format_callback = FormatCallback;
 

@@ -46,7 +46,7 @@ static constexpr int kNumClockRatios = 16;
 enum ParamIndex {
   MODE = 0,
   ATTACK = 1,
-  RELEASE = 2,
+  ENV_RELEASE = 2,
   SHAPE = 3,
   SLEW = 4,
   SH_SRC = 5,
@@ -74,7 +74,7 @@ static bool VisibilityCallback(const Parameter *siblings, uint8_t sibling_count,
   case MODE:
     return true;
   case ATTACK:
-  case RELEASE:
+  case ENV_RELEASE:
     return (mode == 1); // AD
   case SHAPE:
     return (mode == 2); // LFO
@@ -113,7 +113,7 @@ static void FormatCallback(const Parameter *param, const Parameter *siblings,
   case ATTACK:
     format::FormatAttackTime(buffer, buffer_size, value);
     break;
-  case RELEASE:
+  case ENV_RELEASE:
     format::FormatReleaseTime(buffer, buffer_size, value);
     break;
   case RATE:
@@ -152,7 +152,7 @@ template <typename ParamArray> void Setup(ParamArray &params) {
 
   params[MODE] = Parameter::Enum("Mode", kModeNames, kNumModes);
   params[ATTACK] = Parameter::Knob("Attack", 0.0f, 1.0f, 0.01f);
-  params[RELEASE] = Parameter::Knob("Release", 0.0f, 1.0f, 0.3f);
+  params[ENV_RELEASE] = Parameter::Knob("Release", 0.0f, 1.0f, 0.3f);
   params[SHAPE] = Parameter::Enum("Shape", kLFOShapeNames, kNumLFOShapes);
   params[SLEW] = Parameter::Knob("Slew", 0.0f, 1.0f, 0.5f);
   params[SH_SRC] = Parameter::Enum("SH Src", kSHSourceNames, kNumSHSources);
