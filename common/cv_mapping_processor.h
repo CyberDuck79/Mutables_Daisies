@@ -16,6 +16,13 @@ public:
   void MarkDirty() { cache_dirty_ = true; }
   bool IsDirty() const { return cache_dirty_; }
 
+  // Get last known CV value (for UI sampling)
+  float GetLastCV(int index) const {
+    if (index >= 0 && index < 4)
+      return last_cv_values_[index];
+    return 0.0f;
+  }
+
   // Rebuild mapping cache from parameters
   void RebuildCache(Parameter *params, size_t param_count) {
     // Clear caches
@@ -60,17 +67,16 @@ public:
     if (cache_dirty_)
       return; // Should call RebuildCache first
 
-    // Cache filtered CVs to avoid re-filtering
-    float filtered_cvs[4];
+    // Cache filtered CVs to avoid re-filtering and for UI access
     for (int i = 0; i < 4; i++)
-      filtered_cvs[i] = cv_inputs.GetFiltered(i);
+      last_cv_values_[i] = cv_inputs.GetFiltered(i);
 
     for (int cv = 0; cv < 4; cv++) {
       const auto &cache = cv_mappings_[cv];
       if (cache.count == 0)
         continue;
 
-      float cv_value = filtered_cvs[cv];
+      float cv_value = last_cv_values_[cv];
 
       for (uint8_t i = 0; i < cache.count; i++) {
         Parameter *param = cache.mapped_params[i];
@@ -81,15 +87,23 @@ public:
         } else if (param->type == ParamType::CV) {
           param->SetNormalizedWithHysteresis(cv_value, hysteresis);
         } else if (param->type == ParamType::ENUM) {
-          if (param->mapping.plugged) {
+          int idx;
+          if (param->mapping.plugged && param->sample_and_hold) {
+            // S&H Logic: Sample the RESULT (Index), not the CV.
+            // This allows "Pre-setting" via Attenuverter/CV, updating only on
+            // Trigger.
+            int live_idx = CalculateEnumFromCV(*param, cv_value);
+
             if (sample_hold_trigger) {
-              int idx = CalculateEnumFromCV(*param, cv_value);
-              param->SetIndex(idx);
+              param->held_cv = static_cast<float>(live_idx);
             }
+            idx = static_cast<int>(param->held_cv);
           } else {
-            int idx = CalculateEnumFromCV(*param, cv_value);
-            param->SetIndex(idx);
+            // Continuous update
+            idx = CalculateEnumFromCV(*param, cv_value);
           }
+
+          param->SetIndex(idx);
         }
       }
     }
@@ -111,9 +125,25 @@ public:
         if (param->type == ParamType::KNOB) {
           param->SetNormalizedWithHysteresis(val, hysteresis);
         } else if (param->type == ParamType::ENUM) {
-          int index = static_cast<int>(val * param->enum_count);
-          index = std::clamp(index, 0, static_cast<int>(param->enum_count) - 1);
-          param->SetIndex(index);
+          int idx;
+          if (param->sample_and_hold) {
+            // S&H Logic: Sample the RESULT (Index), not the CC value.
+            // This allows "Pre-setting" via Attenuverter/CC, updating only on
+            // Trigger.
+            int live_idx = static_cast<int>(val * param->enum_count);
+            live_idx = std::clamp(live_idx, 0,
+                                  static_cast<int>(param->enum_count) - 1);
+
+            // For CC, we don't have an external trigger, so we update held_cv
+            // continuously if S&H is active and plugged.
+            param->held_cv = static_cast<float>(live_idx);
+            idx = static_cast<int>(param->held_cv);
+          } else {
+            // Continuous update
+            idx = static_cast<int>(val * param->enum_count);
+            idx = std::clamp(idx, 0, static_cast<int>(param->enum_count) - 1);
+          }
+          param->SetIndex(idx);
         }
       }
     }
@@ -153,7 +183,9 @@ public:
       float cv_signal = cv_value - m.offset;
       scaled = 0.5f + cv_signal * m.attenuverter;
     } else {
-      scaled = 0.5f + (cv_value - 0.5f) * m.attenuverter;
+      // Without plugged, use raw CV (0..1 maps to Min..Max)
+      // This matches user expectation of "Raw CV" vs "Attenuverted"
+      scaled = cv_value;
     }
     scaled = std::clamp(scaled, 0.0f, 1.0f);
 
@@ -192,6 +224,7 @@ private:
 
   CVMappingCache cv_mappings_[4];
   CVMappingCache cc_mappings_[128];
+  float last_cv_values_[4] = {0.0f};
   bool cache_dirty_ = true;
 };
 

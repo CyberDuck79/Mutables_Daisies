@@ -137,9 +137,9 @@ struct MenuState {
       // Plugged only visible if CV mapped
       if (item_index == 2)
         return mapping.IsCVSource();
-      // Attenuverter only visible if CV or CC mapped
-      if (item_index == 3)
-        return mapping.IsCVSource() || mapping.source == MappingSource::CC;
+      // Attenuverter always visible (user request)
+      // if (item_index == 3) return ...
+
       // Trigger only visible if Gate mapped
       if (item_index == 4)
         return mapping.IsGateSource();
