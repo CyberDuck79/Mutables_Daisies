@@ -368,61 +368,24 @@ TEST(EncoderController, CycleMappingSourceSkipsGateForKnob)
 
 **Status:** Done. Tests passing.
 
-### Phase 1: Extract Pure Functions
+### Phase 1: Extract Pure Functions (Completed)
 
 **Goal:** Move functions with no side effects
 
-**Functions to extract:**
+**Functions extracted:**
 1. `CycleMappingSource()` → `common/cv_mapping_processor.h`
 2. `CalculateMappedValue()` → `common/cv_mapping_processor.h`
 3. `CalculateEnumFromCV()` → `common/cv_mapping_processor.h`
 
-**Tests to add:** `test_cv_mapping.cpp`
+**Status:** Done. Verified with `test_cv_mapping.cpp`.
 
-**Risk:** Low (pure functions, easy to test)
-
-### Phase 2: Extract CV Mapping Processor
+### Phase 2: Extract CV Mapping Processor (Completed)
 
 **Goal:** Move cache management and processing
 
-**Create:** `common/cv_mapping_processor.h`
+**Created:** `common/cv_mapping_processor.h`
 
-**Contents:**
-```cpp
-namespace mutables_ui {
-
-struct CVMappingCache {
-    Parameter* mapped_params[8];
-    uint8_t count;
-};
-
-class CVMappingProcessor {
-public:
-    void RebuildCache(Parameter* params, size_t count);
-    void ProcessCVMappings(const CVInputBank& cv_inputs, 
-                          float* cc_values,
-                          Parameter* params, 
-                          size_t count);
-    void MarkDirty();
-    bool IsDirty() const;
-    
-    // Static helpers (testable without instance)
-    static float CalculateMappedValue(const Parameter& param, 
-                                      float base_value, 
-                                      float cv_value);
-    static int CalculateEnumFromCV(const Parameter& param, 
-                                   float cv_value);
-    
-private:
-    CVMappingCache cv_mappings_[4];
-    CVMappingCache cc_mappings_[128];
-    bool cache_dirty_ = true;
-};
-
-} // namespace mutables_ui
-```
-
-**Risk:** Medium (state management, used in audio callback)
+**Status:** Done. Verified with `test_cv_mapping.cpp` (stateful tests).
 
 ### Phase 3: Extract MIDI Processor
 
