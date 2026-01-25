@@ -387,46 +387,13 @@ TEST(EncoderController, CycleMappingSourceSkipsGateForKnob)
 
 **Status:** Done. Verified with `test_cv_mapping.cpp` (stateful tests).
 
-### Phase 3: Extract MIDI Processor
+### Phase 3: Extract MIDI Processor (Completed)
 
 **Goal:** Move MIDI channel filtering and CC storage
 
 **Status:** Completed. Verified with `test_midi_processor.cpp`.
 
-**Contents:**
-```cpp
-namespace mutables_ui {
-
-class MIDIProcessor {
-public:
-    void Init(int default_channel = 0);
-    
-    void SetChannel(int channel);
-    int GetChannel() const;
-    
-    bool ShouldProcess(int event_channel) const;
-    
-    float GetCC(int cc_num) const;
-    void SetCC(int cc_num, uint8_t value);
-    float* GetCCArray();  // For CVMappingProcessor
-    
-    static size_t BuildThruMessage(uint8_t event_type, 
-                                   uint8_t channel,
-                                   uint8_t data0, 
-                                   uint8_t data1,
-                                   uint8_t* out_bytes);
-    
-private:
-    int midi_channel_ = 0;
-    float cc_values_[128] = {0};
-};
-
-} // namespace mutables_ui
-```
-
-**Risk:** Low (simple state, no complex logic)
-
-### Phase 4: Extract Parameter Templates
+### Phase 4: Extract Parameter Templates (Completed)
 
 **Goal:** Move reusable parameter configurations
 
@@ -435,69 +402,15 @@ private:
 2. `common/parameter_templates/cv_output_config.h`
 3. `common/parameter_templates/audio_input_config.h`
 
-**Contents of `standard_callbacks.h`:**
-```cpp
-namespace mutables_ui {
-namespace callbacks {
+**Status:** Completed. Verified with `test_parameter_templates.cpp`.
 
-// Generic percentage format
-void FormatPercent(const Parameter* param, ...);
-
-// Generic bipolar percentage format
-void FormatBipolarPercent(const Parameter* param, ...);
-
-// Generic gain dB format
-void FormatGainDB(const Parameter* param, ...);
-
-// Attack/Release time format
-void FormatAttackTime(const Parameter* param, ...);
-void FormatReleaseTime(const Parameter* param, ...);
-
-// Visibility: show only when mode != 0
-bool VisibleWhenModeNonZero(const Parameter* siblings, 
-                            uint8_t count, 
-                            uint8_t index);
-
-} // namespace callbacks
-} // namespace mutables_ui
-```
-
-**Risk:** Low (configuration only, no runtime logic)
-
-### Phase 5: Extract Encoder Controller
+### Phase 5: Extract Encoder Controller (Completed)
 
 **Goal:** Move all encoder handling to common library
 
 **Create:** `common/controllers/encoder_controller.h`
 
-**This is the most complex extraction. Key design decisions:**
-
-1. **Callbacks for module-specific actions:**
-```cpp
-struct EncoderCallbacks {
-    std::function<void(const char*)> onSavePreset;
-    std::function<bool(const char*)> onLoadPreset;
-    std::function<int()> onScanPresets;
-    std::function<const char*(int)> getPresetName;
-    std::function<void(int, char[][32], int)> onListFiles;
-    std::function<void(int, const char*)> onLoadFile;
-    std::function<void(const char*, const char*)> showMessage;
-    std::function<void()> onMappingChanged;
-};
-```
-
-2. **Hardware abstraction:**
-```cpp
-struct EncoderInput {
-    int increment;
-    bool short_press;
-    bool long_press;
-};
-```
-
-**Risk:** High (complex state machine, many edge cases)
-
-**Mitigation:** Comprehensive tests for all state transitions
+**Status:** Completed. Verified with `test_encoder_controller.cpp`.
 
 ### Phase 6: Update main.cpp
 

@@ -4,6 +4,7 @@
 #include "parameter.h"
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 namespace mutables_ui {
 
