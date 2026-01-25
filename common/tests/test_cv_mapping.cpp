@@ -136,9 +136,6 @@ TEST(CVMappingProcessor, CycleMappingSourceForKnob) {
   CVMappingProcessor::CycleMappingSource(p, 1);
   // CV4 -> GATE1 (Skip) -> GATE2 (Skip) -> CC (Maybe?)
   // Logic: do { current++ } while (current == GATE1 || current == GATE2)
-  // So CV4 -> GATE1 ... skips ... -> CC?
-  // Let's verify enums: CV4=4, GATE1=5, GATE2=6, CC=7
-
   EXPECT_EQ(p.mapping.source, MappingSource::CC);
 
   // CC -> None
@@ -168,4 +165,92 @@ TEST(CVMappingProcessor, CycleMappingSourceReverse) {
   CVMappingProcessor::CycleMappingSource(p, -1);
   // CC(7) -> GATE2(6) -> Skips -> GATE1(5) -> Skips -> CV4(4)
   EXPECT_EQ(p.mapping.source, MappingSource::CV4);
+}
+
+// ============================================================================
+// Processing Tests
+// ============================================================================
+
+TEST(CVMappingProcessor, RebuildCacheFindsMappedParams) {
+  Parameter p1 = Parameter::Knob("P1");
+  p1.mapping.source = MappingSource::CV1;
+
+  Parameter p2 = Parameter::Knob("P2");
+  p2.mapping.source = MappingSource::CC;
+  p2.mapping.cc_number = 10;
+
+  Parameter params[] = {p1, p2};
+
+  CVMappingProcessor processor;
+  processor.RebuildCache(params, 2);
+  EXPECT_FALSE(processor.IsDirty());
+
+  // Can't inspect private state easily, but ProcessCVMappings will prove it
+  // worked
+}
+
+// Helper to settle filter state by repeatedly calling Update
+void SettleCV(CVInputBank &cv, float v0, float v1, float v2, float v3) {
+  // CVInputBank doesn't have Process(); UpdateRawValues updates filter
+  // immediately. To settle the 1-pole filter, we call UpdateRawValues many
+  // times.
+  for (int i = 0; i < 100; i++) {
+    cv.UpdateRawValues(v0, v1, v2, v3);
+  }
+}
+
+TEST(CVMappingProcessor, ProcessCVMappingsUpdatesValue) {
+  Parameter p = Parameter::Knob("Test");
+  p.mapping.source = MappingSource::CV1;
+  p.mapping.plugged = false;
+  p.value = 0.0f;
+
+  // CV Input
+  CVInputBank cv_inputs;
+  SettleCV(cv_inputs, 0.75f, 0, 0, 0); // CV1 = 0.75
+
+  CVMappingProcessor processor;
+  processor.RebuildCache(&p, 1);
+
+  // Process
+  processor.ProcessCVMappings(cv_inputs, 0.001f);
+
+  // Param should be updated to 0.75
+  EXPECT_FLOAT_EQ(p.value, 0.75f);
+}
+
+TEST(CVMappingProcessor, ProcessCVMappingsSubmenu) {
+  Parameter child = Parameter::Knob("Child");
+  child.mapping.source = MappingSource::CV2;
+  child.mapping.plugged = false;
+
+  Parameter sub = Parameter::Sub("Sub", &child, 1);
+
+  // CV Input
+  CVInputBank cv_inputs;
+  SettleCV(cv_inputs, 0, 0.33f, 0, 0); // CV2 = 0.33
+
+  CVMappingProcessor processor;
+  processor.RebuildCache(&sub, 1);
+
+  processor.ProcessCVMappings(cv_inputs, 0.001f);
+
+  EXPECT_FLOAT_EQ(child.value, 0.33f);
+}
+
+TEST(CVMappingProcessor, ProcessCCMappingsUpdatesValue) {
+  Parameter p = Parameter::Knob("Test");
+  p.mapping.source = MappingSource::CC;
+  p.mapping.cc_number = 7;
+  p.value = 0.0f;
+
+  CVMappingProcessor processor;
+  processor.RebuildCache(&p, 1);
+
+  float cc_values[128] = {0};
+  cc_values[7] = 0.88f;
+
+  processor.ProcessCCMappings(cc_values, 0.001f);
+
+  EXPECT_FLOAT_EQ(p.value, 0.88f);
 }
