@@ -391,7 +391,7 @@ TEST(EncoderController, CycleMappingSourceSkipsGateForKnob)
 
 **Goal:** Move MIDI channel filtering and CC storage
 
-**Create:** `common/midi_processor.h`
+**Status:** Completed. Verified with `test_midi_processor.cpp`.
 
 **Contents:**
 ```cpp
