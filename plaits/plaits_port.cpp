@@ -306,6 +306,7 @@ void PlaitsPort::SetupParameters() {
   settings_params_[3] = mutables_ui::Parameter::Enum(
       "MIDI Ch", midi_channel_names_, kNumMidiChannels);
   settings_params_[3].SetIndex(0); // Default to Omni
+  settings_params_[4] = mutables_ui::Parameter::Calibration();
   params_[10] = mutables_ui::Parameter::Sub("Settings", settings_params_.data(),
                                             kNumSettingsParams);
 
