@@ -97,7 +97,7 @@ private:
   static constexpr int kNumFilterParams =
       5; // Mode, Freq, Reso, Drive, Track (Moog ladder filter)
   static constexpr int kNumSettingsParams =
-      5; // LPG Color, LPG Decay, Octave, MIDI Ch, Voices
+      6; // LPG Color, LPG Decay, Octave, MIDI Ch, Voices, Calibrate
   std::array<mutables_ui::Parameter, kNumParams> params_;
   std::array<mutables_ui::Parameter, kNumUserDataParams>
       user_data_params_; // Children of User Data submenu

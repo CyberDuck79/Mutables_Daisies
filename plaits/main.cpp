@@ -1,3 +1,4 @@
+#include "../common/calibration_manager.h"
 #include "../common/constants.h"
 #include "../common/controllers/encoder_controller.h"
 #include "../common/cv_input.h"
@@ -34,11 +35,12 @@ CVMappingProcessor cv_processor;
 MIDIProcessor midi_processor;
 EncoderController encoder_controller(cv_processor);
 
-// SD Card / Presets / User Data
+// SD Card / Presets / User Data / Calibration
 SdmmcHandler sdmmc;
 FatFSInterface fsi;
 PresetManager preset_manager;
 UserDataManager user_data_manager;
+CalibrationManager calibration_manager;
 
 // CPU Monitor
 mutables::CpuMonitor cpu_monitor;
@@ -97,29 +99,13 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
                               plaits_module.GetParameterCount());
   }
 
-  // Update CV inputs with raw ADC values (no pot scaling or processing)
-  // This preserves precision for V/Oct and accurate offset capture
-  // Invert values since ADC reads are inverted on Daisy Patch (0V = 1.0, 5V =
-  // 0.0) Scale from hardware range (0.03-0.96) to full software range
-  // (0.0-0.99)
-  auto scale_adc = [](float raw) -> float {
-    constexpr float kADCMin = 0.03f;
-    constexpr float kADCMax = 0.96f;
-    constexpr float kADCRange = kADCMax - kADCMin; // 0.93
-    constexpr float kDeadzone =
-        0.005f; // Values below 0.5% become true 0.0 (displays as 0.00)
-    float scaled = (raw - kADCMin) / kADCRange * 0.99f;
-    scaled = std::clamp(scaled, 0.0f, 0.99f);
-    // Apply deadzone at bottom to ensure true 0.0 when knob is at minimum
-    if (scaled < kDeadzone)
-      scaled = 0.0f;
-    return scaled;
-  };
-
-  float cv1 = scale_adc(1.0f - hw.controls[DaisyPatch::CTRL_1].GetRawFloat());
-  float cv2 = scale_adc(1.0f - hw.controls[DaisyPatch::CTRL_2].GetRawFloat());
-  float cv3 = scale_adc(1.0f - hw.controls[DaisyPatch::CTRL_3].GetRawFloat());
-  float cv4 = scale_adc(1.0f - hw.controls[DaisyPatch::CTRL_4].GetRawFloat());
+  // Update CV inputs with raw ADC values
+  // Pass inverted values (Daisy Patch ADC: 0V = 1.0, 5V = 0.0)
+  // CVInputBank applies calibration scaling internally
+  float cv1 = 1.0f - hw.controls[DaisyPatch::CTRL_1].GetRawFloat();
+  float cv2 = 1.0f - hw.controls[DaisyPatch::CTRL_2].GetRawFloat();
+  float cv3 = 1.0f - hw.controls[DaisyPatch::CTRL_3].GetRawFloat();
+  float cv4 = 1.0f - hw.controls[DaisyPatch::CTRL_4].GetRawFloat();
 
   cv_inputs.UpdateRawValues(cv1, cv2, cv3, cv4);
 
@@ -409,6 +395,10 @@ void UpdateDisplay() {
         menu.IsInSub() && menu.sub_parent ? menu.sub_parent->children : params;
     const char *title = current_params[menu.file_browser_param_idx].name;
     display.RenderFileBrowser(menu, title, GetUserDataFileNameCallback);
+  } else if (menu.state == UIState::Calibration) {
+    // Calibration mode - show calibration UI
+    float current_raw_cv = cv_inputs.GetRawADC(menu.calibration_cv_index);
+    display.RenderCalibration(menu, calibration_manager.GetCalibration(), current_raw_cv);
   } else if (menu.IsInSubmenu() && menu.submenu_param_index >= 0) {
     // Get the correct parameter - either from SUB children
     // or root params
@@ -460,6 +450,12 @@ int main(void) {
   // Initialize preset manager
   preset_manager.Init(sdmmc, fsi, plaits_module.GetShortName());
   logger.PrintLine("Preset manager initialized");
+
+  // Initialize calibration manager and load calibration
+  calibration_manager.Init(fsi);
+  calibration_manager.Load();  // Logs internally, uses defaults if no file
+  cv_inputs.SetCalibration(&calibration_manager.GetCalibration());
+  logger.PrintLine("Calibration initialized");
 
   // Try to load "default" preset if it exists
   if (preset_manager.IsSDAvailable()) {
@@ -621,6 +617,38 @@ int main(void) {
 
   callbacks.on_display_message = [&](const char *title, const char *msg) {
     display.RenderMessage(title, msg);
+    hw.display.Update();
+    daisy::System::Delay(kMessageDisplayDelayMs);
+  };
+
+  // Calibration callbacks
+  callbacks.on_get_raw_cv = [&](int cv_index) -> float {
+    return cv_inputs.GetRawADC(cv_index);
+  };
+
+  callbacks.on_calibration_complete = [&](int cv_index, float min_val, float max_val) {
+    calibration_manager.SetCVCalibration(cv_index, min_val, max_val);
+    // Update CVInputBank with new calibration
+    cv_inputs.SetCalibration(&calibration_manager.GetCalibration());
+    if (g_logger) {
+      g_logger->PrintLine("Cal CV%d: %.4f - %.4f", cv_index + 1, min_val, max_val);
+    }
+  };
+
+  callbacks.on_calibration_save = [&]() {
+    hw.StopAudio();
+    bool success = calibration_manager.Save();
+    hw.StartAudio(AudioCallback);
+    display.RenderMessage(success ? "Saved!" : "Error",
+                          success ? "Calibration" : "Save failed");
+    hw.display.Update();
+    daisy::System::Delay(kMessageDisplayDelayMs);
+  };
+
+  callbacks.on_calibration_reset_all = [&]() {
+    calibration_manager.ResetAll();
+    cv_inputs.SetCalibration(&calibration_manager.GetCalibration());
+    display.RenderMessage("Reset", "Defaults loaded");
     hw.display.Update();
     daisy::System::Delay(kMessageDisplayDelayMs);
   };

@@ -338,6 +338,7 @@ void PlaitsPort::SetupParameters() {
   settings_params_[4] = mutables_ui::Parameter::Enum(
       "Voices", voice_count_names_, kNumVoiceCounts);
   settings_params_[4].SetIndex(0); // Default to 1 voice (monophonic)
+  settings_params_[5] = mutables_ui::Parameter::Calibration();
   params_[10] = mutables_ui::Parameter::Sub("Settings", settings_params_.data(),
                                             kNumSettingsParams);
 
