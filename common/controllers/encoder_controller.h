@@ -13,6 +13,7 @@ struct EncoderHardwareState {
   bool pressed;            // Current button state
   bool rising_edge;        // Button just pressed
   uint32_t press_duration; // Time since press start (if pressed/released)
+  uint32_t current_time_ms; // Current system time in ms (for timed captures)
 };
 
 struct EncoderCallbacks {
@@ -130,7 +131,7 @@ public:
       HandleFileBrowser(hw.increment, short_press, menu, params);
       break;
     case UIState::Calibration:
-      HandleCalibration(hw.increment, short_press, long_press_detected, menu);
+      HandleCalibration(hw, short_press, long_press_detected, menu);
       break;
     }
   }
@@ -447,8 +448,10 @@ private:
     }
   }
 
-  void HandleCalibration(int inc, bool short_press, bool long_press,
+  void HandleCalibration(const EncoderHardwareState &hw, bool short_press, bool long_press,
                          MenuState &menu) {
+    int inc = hw.increment;
+    
     switch (menu.calibration_step) {
     case CalibrationStep::SelectCV:
       // Navigate menu
@@ -456,21 +459,25 @@ private:
       if (inc < 0) menu.PrevCalibrationItem();
       
       if (short_press) {
-        switch (menu.calibration_selected) {
+        // -1 = title/back, exit calibration
+        if (menu.calibration_selected == -1) {
+          menu.ExitCalibration();
+          break;
+        }
+        
+        CalibrationMenuItem item = static_cast<CalibrationMenuItem>(menu.calibration_selected);
+        switch (item) {
         case CalibrationMenuItem::CV1:
         case CalibrationMenuItem::CV2:
         case CalibrationMenuItem::CV3:
         case CalibrationMenuItem::CV4:
           // Start calibrating this CV
-          menu.StartCVCalibration(static_cast<int>(menu.calibration_selected));
+          menu.StartCVCalibration(menu.calibration_selected);
           break;
         case CalibrationMenuItem::ResetAll:
           // Reset all calibrations to default
           if (callbacks_.on_calibration_reset_all) {
             callbacks_.on_calibration_reset_all();
-          }
-          if (callbacks_.on_display_message) {
-            callbacks_.on_display_message("Reset", "Defaults restored");
           }
           break;
         case CalibrationMenuItem::Save:
@@ -478,10 +485,6 @@ private:
           if (callbacks_.on_calibration_save) {
             callbacks_.on_calibration_save();
           }
-          menu.ExitCalibration();
-          break;
-        case CalibrationMenuItem::Cancel:
-          // Exit without saving
           menu.ExitCalibration();
           break;
         default:
@@ -496,34 +499,44 @@ private:
       break;
       
     case CalibrationStep::CaptureMin:
-      // Short press captures current value as min
-      if (short_press) {
+      // If capture is active, update it continuously
+      if (menu.IsCaptureActive()) {
         float raw_cv = 0.0f;
         if (callbacks_.on_get_raw_cv) {
           raw_cv = callbacks_.on_get_raw_cv(menu.calibration_cv_index);
         }
-        menu.CaptureCalibrationMin(raw_cv);
+        // UpdateCapture will transition to CaptureMax when done
+        menu.UpdateCapture(raw_cv, hw.current_time_ms);
+      } else if (short_press) {
+        // Short press starts timed capture
+        menu.StartCaptureMin(hw.current_time_ms);
       }
       
       // Long press cancels and returns to menu
       if (long_press) {
         menu.calibration_step = CalibrationStep::SelectCV;
+        menu.calibration_capture_active = false;
       }
       break;
       
     case CalibrationStep::CaptureMax:
-      // Short press captures current value as max
-      if (short_press) {
+      // If capture is active, update it continuously
+      if (menu.IsCaptureActive()) {
         float raw_cv = 0.0f;
         if (callbacks_.on_get_raw_cv) {
           raw_cv = callbacks_.on_get_raw_cv(menu.calibration_cv_index);
         }
-        menu.CaptureCalibrationMax(raw_cv);
+        // UpdateCapture will transition to Confirm when done
+        menu.UpdateCapture(raw_cv, hw.current_time_ms);
+      } else if (short_press) {
+        // Short press starts timed capture
+        menu.StartCaptureMax(hw.current_time_ms);
       }
       
       // Long press cancels and returns to menu
       if (long_press) {
         menu.calibration_step = CalibrationStep::SelectCV;
+        menu.calibration_capture_active = false;
       }
       break;
       

@@ -14,7 +14,11 @@ static constexpr float kDefaultCVMin = 0.03f;
 static constexpr float kDefaultCVMax = 0.96f;
 
 // Small margin to ensure we can reach true 0.0 and 1.0 after calibration
-static constexpr float kCalibrationMargin = 0.0001f;
+// Keep small since we now capture over time to get actual min/max
+static constexpr float kCalibrationMargin = 0.0005f;
+
+// Capture duration in milliseconds (time to sample ADC for min/max)
+static constexpr uint32_t kCalibrationCaptureDurationMs = 4000;
 
 // Calibration data for a single CV input
 struct CVCalibration {
@@ -128,7 +132,6 @@ enum class CalibrationMenuItem {
     CV4 = 3,
     ResetAll,
     Save,
-    Cancel,
     COUNT
 };
 
@@ -143,7 +146,6 @@ inline const char* GetCalibrationMenuItemName(CalibrationMenuItem item) {
         case CalibrationMenuItem::CV4: return "CV4";
         case CalibrationMenuItem::ResetAll: return "Reset All";
         case CalibrationMenuItem::Save: return "Save";
-        case CalibrationMenuItem::Cancel: return "Cancel";
         default: return "?";
     }
 }

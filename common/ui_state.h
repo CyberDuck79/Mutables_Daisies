@@ -57,10 +57,17 @@ struct MenuState {
 
   // For calibration (Calibration state)
   CalibrationStep calibration_step;
-  CalibrationMenuItem calibration_selected;
-  int calibration_cv_index;      // Which CV is being calibrated (0-3)
-  float calibration_captured_min; // Captured min value
-  float calibration_captured_max; // Captured max value
+  int calibration_selected;         // -1 = title/back, 0-5 = menu items
+  int calibration_scroll_offset;    // Scroll offset for calibration menu
+  int calibration_cv_index;         // Which CV is being calibrated (0-3)
+  float calibration_captured_min;   // Final captured min value
+  float calibration_captured_max;   // Final captured max value
+  
+  // Timed capture state
+  bool calibration_capture_active;      // Is capture in progress?
+  uint32_t calibration_capture_start;   // Start time (ms)
+  float calibration_capture_running_min; // Running min during capture
+  float calibration_capture_running_max; // Running max during capture
 
   MenuState()
       : state(UIState::Navigate), selected_param(0), param_count(0),
@@ -71,10 +78,15 @@ struct MenuState {
         file_selected(0), file_scroll_offset(0), file_count(0),
         file_browser_param_idx(-1),
         calibration_step(CalibrationStep::SelectCV),
-        calibration_selected(CalibrationMenuItem::CV1),
+        calibration_selected(-1),
+        calibration_scroll_offset(0),
         calibration_cv_index(0),
         calibration_captured_min(0.0f),
-        calibration_captured_max(1.0f) {
+        calibration_captured_max(1.0f),
+        calibration_capture_active(false),
+        calibration_capture_start(0),
+        calibration_capture_running_min(1.0f),
+        calibration_capture_running_max(0.0f) {
     preset_name[0] = '\0';
   }
 
@@ -645,7 +657,8 @@ struct MenuState {
   void EnterCalibration() {
     state = UIState::Calibration;
     calibration_step = CalibrationStep::SelectCV;
-    calibration_selected = CalibrationMenuItem::CV1;
+    calibration_selected = 0;  // Start on CV1
+    calibration_scroll_offset = 0;
     calibration_cv_index = 0;
     calibration_captured_min = 0.0f;
     calibration_captured_max = 1.0f;
@@ -657,17 +670,39 @@ struct MenuState {
     calibration_step = CalibrationStep::SelectCV;
   }
 
-  // Navigate calibration menu
+  // Navigate calibration menu (-1 = title, 0-5 = items, wraps around)
   void NextCalibrationItem() {
-    int current = static_cast<int>(calibration_selected);
-    current = (current + 1) % kCalibrationMenuItemCount;
-    calibration_selected = static_cast<CalibrationMenuItem>(current);
+    calibration_selected++;
+    if (calibration_selected >= kCalibrationMenuItemCount) {
+      // Wrap to title
+      calibration_selected = -1;
+    }
+    UpdateCalibrationScroll();
   }
 
   void PrevCalibrationItem() {
-    int current = static_cast<int>(calibration_selected);
-    current = (current - 1 + kCalibrationMenuItemCount) % kCalibrationMenuItemCount;
-    calibration_selected = static_cast<CalibrationMenuItem>(current);
+    calibration_selected--;
+    if (calibration_selected < -1) {
+      // Wrap to last item
+      calibration_selected = kCalibrationMenuItemCount - 1;
+    }
+    UpdateCalibrationScroll();
+  }
+  
+  // Ensure scroll offset keeps selection visible
+  void UpdateCalibrationScroll() {
+    const int visible_max = 4;  // Only 4 items fit below title
+    
+    if (calibration_selected <= 0) {
+      // Title or first item - no scroll needed
+      calibration_scroll_offset = 0;
+    } else if (calibration_selected < calibration_scroll_offset) {
+      // Selection above visible area - scroll up
+      calibration_scroll_offset = calibration_selected;
+    } else if (calibration_selected >= calibration_scroll_offset + visible_max) {
+      // Selection below visible area - scroll down
+      calibration_scroll_offset = calibration_selected - visible_max + 1;
+    }
   }
 
   // Start calibrating a specific CV
@@ -676,23 +711,96 @@ struct MenuState {
     calibration_step = CalibrationStep::CaptureMin;
     calibration_captured_min = 0.0f;
     calibration_captured_max = 1.0f;
+    calibration_capture_active = false;
   }
 
-  // Capture the current CV value as min
+  // Start timed capture for min value
+  void StartCaptureMin(uint32_t current_time_ms) {
+    calibration_capture_active = true;
+    calibration_capture_start = current_time_ms;
+    calibration_capture_running_min = 1.0f;  // Start high, track lowest
+    calibration_capture_running_max = 0.0f;  // Not used for min capture
+  }
+  
+  // Start timed capture for max value
+  void StartCaptureMax(uint32_t current_time_ms) {
+    calibration_capture_active = true;
+    calibration_capture_start = current_time_ms;
+    calibration_capture_running_min = 1.0f;  // Not used for max capture
+    calibration_capture_running_max = 0.0f;  // Start low, track highest
+  }
+  
+  // Update capture with new sample - call this frequently!
+  // Returns true if capture is still in progress
+  bool UpdateCapture(float raw_value, uint32_t current_time_ms) {
+    if (!calibration_capture_active) return false;
+    
+    // Track min/max
+    if (raw_value < calibration_capture_running_min) {
+      calibration_capture_running_min = raw_value;
+    }
+    if (raw_value > calibration_capture_running_max) {
+      calibration_capture_running_max = raw_value;
+    }
+    
+    // Check if capture duration elapsed
+    uint32_t elapsed = current_time_ms - calibration_capture_start;
+    if (elapsed >= kCalibrationCaptureDurationMs) {
+      // Capture complete
+      calibration_capture_active = false;
+      
+      if (calibration_step == CalibrationStep::CaptureMin) {
+        // For min capture, use the lowest value seen
+        calibration_captured_min = calibration_capture_running_min;
+        calibration_step = CalibrationStep::CaptureMax;
+      } else if (calibration_step == CalibrationStep::CaptureMax) {
+        // For max capture, use the highest value seen
+        calibration_captured_max = calibration_capture_running_max;
+        calibration_step = CalibrationStep::Confirm;
+      }
+      return false;  // Capture finished
+    }
+    return true;  // Still capturing
+  }
+  
+  // Get capture progress (0.0 to 1.0)
+  float GetCaptureProgress(uint32_t current_time_ms) const {
+    if (!calibration_capture_active) return 0.0f;
+    uint32_t elapsed = current_time_ms - calibration_capture_start;
+    float progress = static_cast<float>(elapsed) / static_cast<float>(kCalibrationCaptureDurationMs);
+    return (progress > 1.0f) ? 1.0f : progress;
+  }
+  
+  // Check if timed capture is active
+  bool IsCaptureActive() const { return calibration_capture_active; }
+  
+  // Get current running value during capture (for display)
+  float GetCaptureRunningValue() const {
+    if (calibration_step == CalibrationStep::CaptureMin) {
+      return calibration_capture_running_min;
+    } else {
+      return calibration_capture_running_max;
+    }
+  }
+
+  // Capture the current CV value as min (instant - for compatibility)
   void CaptureCalibrationMin(float raw_value) {
     calibration_captured_min = raw_value;
     calibration_step = CalibrationStep::CaptureMax;
+    calibration_capture_active = false;
   }
 
-  // Capture the current CV value as max
+  // Capture the current CV value as max (instant - for compatibility)
   void CaptureCalibrationMax(float raw_value) {
     calibration_captured_max = raw_value;
     calibration_step = CalibrationStep::Confirm;
+    calibration_capture_active = false;
   }
 
   // Confirm calibration and return to menu
   void ConfirmCalibration() {
     calibration_step = CalibrationStep::SelectCV;
+    calibration_capture_active = false;
   }
 
   // Retry calibration (go back to CaptureMin)
@@ -700,6 +808,7 @@ struct MenuState {
     calibration_step = CalibrationStep::CaptureMin;
     calibration_captured_min = 0.0f;
     calibration_captured_max = 1.0f;
+    calibration_capture_active = false;
   }
 
   // Check if in calibration capture mode

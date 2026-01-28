@@ -190,11 +190,15 @@ TEST(CVMappingProcessor, RebuildCacheFindsMappedParams) {
 }
 
 // Create a test calibration that does identity mapping (no scaling)
+// Accounts for kCalibrationMargin by setting min/max to cancel it out
 static SystemCalibration CreateTestCalibration() {
   SystemCalibration cal;
+  // With margin = 0.002, effective_min = min - 0.002, effective_max = max + 0.002
+  // For identity: we want effective range to be exactly 0.0 to 1.0
+  // So min = 0.002, max = 0.998 -> effective: 0.0 to 1.0
   for (int i = 0; i < 4; i++) {
-    cal.cv_inputs[i].min = 0.0f;
-    cal.cv_inputs[i].max = 1.0f;
+    cal.cv_inputs[i].min = kCalibrationMargin;
+    cal.cv_inputs[i].max = 1.0f - kCalibrationMargin;
   }
   cal.UpdateChecksum();
   return cal;
