@@ -25,6 +25,12 @@ struct EncoderCallbacks {
   std::function<void(const char *, const char *)>
       on_display_message;               // title, message
   std::function<int()> on_scan_presets; // Returns count
+  
+  // Calibration callbacks
+  std::function<float(int)> on_get_raw_cv;           // Get raw CV value for index
+  std::function<void(int, float, float)> on_calibration_complete; // cv_index, min, max
+  std::function<void()> on_calibration_save;         // Save calibration to SD
+  std::function<void()> on_calibration_reset_all;    // Reset all to defaults
 };
 
 class EncoderController {
@@ -123,6 +129,9 @@ public:
     case UIState::FileBrowser:
       HandleFileBrowser(hw.increment, short_press, menu, params);
       break;
+    case UIState::Calibration:
+      HandleCalibration(hw.increment, short_press, long_press_detected, menu);
+      break;
     }
   }
 
@@ -218,6 +227,9 @@ private:
         } else if (param.type == ParamType::USER_DATA) {
           if (callbacks_.on_user_data_browser)
             callbacks_.on_user_data_browser(param.user_data_target);
+        } else if (param.type == ParamType::CALIBRATION) {
+          // Enter calibration mode
+          menu.EnterCalibration();
         }
       }
     } else if (long_press) {
@@ -432,6 +444,112 @@ private:
         callbacks_.on_user_data_selected(&param, menu.GetSelectedFile());
       }
       menu.ExitFileBrowser();
+    }
+  }
+
+  void HandleCalibration(int inc, bool short_press, bool long_press,
+                         MenuState &menu) {
+    switch (menu.calibration_step) {
+    case CalibrationStep::SelectCV:
+      // Navigate menu
+      if (inc > 0) menu.NextCalibrationItem();
+      if (inc < 0) menu.PrevCalibrationItem();
+      
+      if (short_press) {
+        switch (menu.calibration_selected) {
+        case CalibrationMenuItem::CV1:
+        case CalibrationMenuItem::CV2:
+        case CalibrationMenuItem::CV3:
+        case CalibrationMenuItem::CV4:
+          // Start calibrating this CV
+          menu.StartCVCalibration(static_cast<int>(menu.calibration_selected));
+          break;
+        case CalibrationMenuItem::ResetAll:
+          // Reset all calibrations to default
+          if (callbacks_.on_calibration_reset_all) {
+            callbacks_.on_calibration_reset_all();
+          }
+          if (callbacks_.on_display_message) {
+            callbacks_.on_display_message("Reset", "Defaults restored");
+          }
+          break;
+        case CalibrationMenuItem::Save:
+          // Save calibration to SD
+          if (callbacks_.on_calibration_save) {
+            callbacks_.on_calibration_save();
+          }
+          menu.ExitCalibration();
+          break;
+        case CalibrationMenuItem::Cancel:
+          // Exit without saving
+          menu.ExitCalibration();
+          break;
+        default:
+          break;
+        }
+      }
+      
+      if (long_press) {
+        // Long press exits calibration mode
+        menu.ExitCalibration();
+      }
+      break;
+      
+    case CalibrationStep::CaptureMin:
+      // Short press captures current value as min
+      if (short_press) {
+        float raw_cv = 0.0f;
+        if (callbacks_.on_get_raw_cv) {
+          raw_cv = callbacks_.on_get_raw_cv(menu.calibration_cv_index);
+        }
+        menu.CaptureCalibrationMin(raw_cv);
+      }
+      
+      // Long press cancels and returns to menu
+      if (long_press) {
+        menu.calibration_step = CalibrationStep::SelectCV;
+      }
+      break;
+      
+    case CalibrationStep::CaptureMax:
+      // Short press captures current value as max
+      if (short_press) {
+        float raw_cv = 0.0f;
+        if (callbacks_.on_get_raw_cv) {
+          raw_cv = callbacks_.on_get_raw_cv(menu.calibration_cv_index);
+        }
+        menu.CaptureCalibrationMax(raw_cv);
+      }
+      
+      // Long press cancels and returns to menu
+      if (long_press) {
+        menu.calibration_step = CalibrationStep::SelectCV;
+      }
+      break;
+      
+    case CalibrationStep::Confirm:
+      if (short_press) {
+        // Confirm and apply calibration
+        if (callbacks_.on_calibration_complete) {
+          callbacks_.on_calibration_complete(
+            menu.calibration_cv_index,
+            menu.calibration_captured_min,
+            menu.calibration_captured_max
+          );
+        }
+        menu.ConfirmCalibration();
+      }
+      
+      if (inc != 0) {
+        // Any rotation = retry
+        menu.RetryCalibration();
+      }
+      
+      if (long_press) {
+        // Long press cancels and returns to menu
+        menu.calibration_step = CalibrationStep::SelectCV;
+      }
+      break;
     }
   }
 };

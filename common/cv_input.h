@@ -1,5 +1,6 @@
 #pragma once
 
+#include "calibration.h"
 #include "parameter.h"
 #include <algorithm>
 
@@ -53,41 +54,66 @@ private:
     float raw_value_ = 0.0f;
 };
 
-// Helper to manage all 4 CV inputs
+// Helper to manage all 4 CV inputs with calibration support
 class CVInputBank {
 public:
-    CVInputBank() {}
+    CVInputBank() : calibration_(nullptr) {}
     
-    // Update with raw ADC values (0.0-1.0 from ADC)
+    // Set calibration data (optional, uses defaults if not set)
+    void SetCalibration(const SystemCalibration* calibration) {
+        calibration_ = calibration;
+    }
+    
+    // Update with raw ADC values (0.0-1.0 from ADC, before any scaling)
+    // Note: Caller should NOT invert or scale - pass raw ADC values
     void UpdateRawValues(float cv1, float cv2, float cv3, float cv4) {
-        raw_values_[0] = cv1;
-        raw_values_[1] = cv2;
-        raw_values_[2] = cv3;
-        raw_values_[3] = cv4;
+        // Store the truly raw ADC values (before any calibration)
+        raw_adc_values_[0] = cv1;
+        raw_adc_values_[1] = cv2;
+        raw_adc_values_[2] = cv3;
+        raw_adc_values_[3] = cv4;
         
-        // Store raw and apply light filtering
+        // Apply calibration scaling
         for (int i = 0; i < 4; i++) {
+            if (calibration_) {
+                raw_values_[i] = calibration_->cv_inputs[i].Scale(raw_adc_values_[i]);
+            } else {
+                // Use default calibration
+                CVCalibration default_cal;
+                raw_values_[i] = default_cal.Scale(raw_adc_values_[i]);
+            }
+            
+            // Store scaled raw and apply light filtering
             filters_[i].SetRaw(raw_values_[i]);
             filtered_values_[i] = filters_[i].Filter(raw_values_[i]);
         }
     }
     
-    // Get filtered value (light lowpass only, no pot scaling)
+    // Get filtered value (light lowpass, after calibration scaling)
     float GetFiltered(int index) const {
         if (index < 0 || index >= 4) return 0.0f;
         return filtered_values_[index];
     }
     
-    // Get raw unfiltered ADC value (for maximum precision, e.g., V/Oct)
+    // Get calibrated raw value (after calibration, before filtering)
     float GetRaw(int index) const {
         if (index < 0 || index >= 4) return 0.0f;
         return raw_values_[index];
     }
     
+    // Get truly raw ADC value (before any calibration or filtering)
+    // Use this for calibration capture
+    float GetRawADC(int index) const {
+        if (index < 0 || index >= 4) return 0.0f;
+        return raw_adc_values_[index];
+    }
+    
 private:
-    float raw_values_[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    float filtered_values_[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float raw_adc_values_[4] = {0.0f, 0.0f, 0.0f, 0.0f};  // Truly raw ADC
+    float raw_values_[4] = {0.0f, 0.0f, 0.0f, 0.0f};       // After calibration
+    float filtered_values_[4] = {0.0f, 0.0f, 0.0f, 0.0f};  // After filtering
     CVInput filters_[4];
+    const SystemCalibration* calibration_;
 };
 
 } // namespace mutables_ui

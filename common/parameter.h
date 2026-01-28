@@ -9,15 +9,16 @@ namespace mutables_ui {
 
 // Parameter types per new specification
 enum class ParamType {
-  KNOB,      // Continuous with CV/CC mapping, attenuverter, velocity
-  CV,        // Direct CV input (read-only, no attenuverter emulation)
-  ENUM,      // Discrete selection with Gate/CV/CC mapping
-  MIDI,      // MIDI channel selection (1-16)
-  SUB,       // Submenu container
-  SAVE,      // Preset save action
-  LOAD,      // Preset load action
-  USER_DATA, // User data file selector (shows filename, triggers file browser)
-  BACK       // Back button to exit SUB submenu
+  KNOB,        // Continuous with CV/CC mapping, attenuverter, velocity
+  CV,          // Direct CV input (read-only, no attenuverter emulation)
+  ENUM,        // Discrete selection with Gate/CV/CC mapping
+  MIDI,        // MIDI channel selection (1-16)
+  SUB,         // Submenu container
+  SAVE,        // Preset save action
+  LOAD,        // Preset load action
+  USER_DATA,   // User data file selector (shows filename, triggers file browser)
+  BACK,        // Back button to exit SUB submenu
+  CALIBRATION  // CV input calibration action
 };
 
 // Mapping source options
@@ -222,6 +223,14 @@ struct Parameter {
     Parameter p;
     p.name = "Back";
     p.type = ParamType::BACK;
+    return p;
+  }
+
+  // CALIBRATION constructor
+  static Parameter Calibration(const char *name = "Calibrate") {
+    Parameter p;
+    p.name = name;
+    p.type = ParamType::CALIBRATION;
     return p;
   }
 

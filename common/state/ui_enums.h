@@ -12,7 +12,8 @@ enum class UIState {
     SubmenuEdit,    // Editing submenu values
     CharInput,      // Typing preset name for Save
     PresetList,     // Browsing presets for Load
-    FileBrowser     // Browsing files for USER_DATA selection
+    FileBrowser,    // Browsing files for USER_DATA selection
+    Calibration     // CV input calibration mode
 };
 
 // Submenu items for KNOB type (no Back - long press to exit)

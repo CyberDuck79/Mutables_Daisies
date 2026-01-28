@@ -1,5 +1,6 @@
 #pragma once
 
+#include "calibration.h"
 #include "parameter.h"
 #include "state/ui_enums.h" // Enums extracted to separate file
 #include <cstdint>
@@ -54,6 +55,13 @@ struct MenuState {
   int file_count;             // Total files found
   int file_browser_param_idx; // Which USER_DATA parameter we're editing
 
+  // For calibration (Calibration state)
+  CalibrationStep calibration_step;
+  CalibrationMenuItem calibration_selected;
+  int calibration_cv_index;      // Which CV is being calibrated (0-3)
+  float calibration_captured_min; // Captured min value
+  float calibration_captured_max; // Captured max value
+
   MenuState()
       : state(UIState::Navigate), selected_param(0), param_count(0),
         scroll_offset(0), submenu_param_index(-1), submenu_selected_item(0),
@@ -61,7 +69,12 @@ struct MenuState {
         sub_child_selected(0), char_position(0), char_index(0),
         preset_selected(0), preset_scroll_offset(0), preset_count(0),
         file_selected(0), file_scroll_offset(0), file_count(0),
-        file_browser_param_idx(-1) {
+        file_browser_param_idx(-1),
+        calibration_step(CalibrationStep::SelectCV),
+        calibration_selected(CalibrationMenuItem::CV1),
+        calibration_cv_index(0),
+        calibration_captured_min(0.0f),
+        calibration_captured_max(1.0f) {
     preset_name[0] = '\0';
   }
 
@@ -625,6 +638,83 @@ struct MenuState {
 
   // Check if "Default" is selected
   bool IsDefaultSelected() const { return file_selected == 0; }
+
+  // === Calibration Methods ===
+
+  // Enter calibration mode
+  void EnterCalibration() {
+    state = UIState::Calibration;
+    calibration_step = CalibrationStep::SelectCV;
+    calibration_selected = CalibrationMenuItem::CV1;
+    calibration_cv_index = 0;
+    calibration_captured_min = 0.0f;
+    calibration_captured_max = 1.0f;
+  }
+
+  // Exit calibration mode (back to Navigate)
+  void ExitCalibration() {
+    state = UIState::Navigate;
+    calibration_step = CalibrationStep::SelectCV;
+  }
+
+  // Navigate calibration menu
+  void NextCalibrationItem() {
+    int current = static_cast<int>(calibration_selected);
+    current = (current + 1) % kCalibrationMenuItemCount;
+    calibration_selected = static_cast<CalibrationMenuItem>(current);
+  }
+
+  void PrevCalibrationItem() {
+    int current = static_cast<int>(calibration_selected);
+    current = (current - 1 + kCalibrationMenuItemCount) % kCalibrationMenuItemCount;
+    calibration_selected = static_cast<CalibrationMenuItem>(current);
+  }
+
+  // Start calibrating a specific CV
+  void StartCVCalibration(int cv_index) {
+    calibration_cv_index = cv_index;
+    calibration_step = CalibrationStep::CaptureMin;
+    calibration_captured_min = 0.0f;
+    calibration_captured_max = 1.0f;
+  }
+
+  // Capture the current CV value as min
+  void CaptureCalibrationMin(float raw_value) {
+    calibration_captured_min = raw_value;
+    calibration_step = CalibrationStep::CaptureMax;
+  }
+
+  // Capture the current CV value as max
+  void CaptureCalibrationMax(float raw_value) {
+    calibration_captured_max = raw_value;
+    calibration_step = CalibrationStep::Confirm;
+  }
+
+  // Confirm calibration and return to menu
+  void ConfirmCalibration() {
+    calibration_step = CalibrationStep::SelectCV;
+  }
+
+  // Retry calibration (go back to CaptureMin)
+  void RetryCalibration() {
+    calibration_step = CalibrationStep::CaptureMin;
+    calibration_captured_min = 0.0f;
+    calibration_captured_max = 1.0f;
+  }
+
+  // Check if in calibration capture mode
+  bool IsCalibrationCapturing() const {
+    return state == UIState::Calibration && 
+           (calibration_step == CalibrationStep::CaptureMin ||
+            calibration_step == CalibrationStep::CaptureMax);
+  }
+
+  // Get the CV index being calibrated
+  int GetCalibrationCVIndex() const { return calibration_cv_index; }
+
+  // Get captured values
+  float GetCapturedMin() const { return calibration_captured_min; }
+  float GetCapturedMax() const { return calibration_captured_max; }
 };
 
 } // namespace mutables_ui
