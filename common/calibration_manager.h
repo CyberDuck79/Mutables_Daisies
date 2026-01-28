@@ -44,29 +44,55 @@ public:
         // Ensure system directory exists
         EnsureSystemDirectory();
         
-        FIL file;
-        FRESULT fr = f_open(&file, kCalibrationFilePath, FA_READ);
+        FRESULT fr = f_open(&file_, kCalibrationFilePath, FA_READ);
         if (fr != FR_OK) {
-            if (g_logger) g_logger->PrintLine("Cal: No file, using defaults");
+            if (g_logger) g_logger->PrintLine("Cal: No file (fr=%d), using defaults", (int)fr);
             calibration_.ResetToDefaults();
             return false;
         }
         
-        // Read into temporary buffer
-        SystemCalibration temp;
+        // Log file size for debugging
+        FSIZE_t file_size = f_size(&file_);
+        if (g_logger) g_logger->PrintLine("Cal: File opened, size=%u", (unsigned int)file_size);
+        
+        // Use shared DMA buffer for SD read (required for proper SD card access)
+        auto& dma_buffer = sd_utils::GetSharedDmaBuffer();
+        
+        if (sizeof(SystemCalibration) > sd_utils::DMA_BUFFER_SIZE) {
+            if (g_logger) g_logger->PrintLine("Cal: Buffer too small");
+            f_close(&file_);
+            calibration_.ResetToDefaults();
+            return false;
+        }
+        
         UINT bytes_read;
-        fr = f_read(&file, &temp, sizeof(SystemCalibration), &bytes_read);
-        f_close(&file);
+        fr = f_read(&file_, dma_buffer.data, sizeof(SystemCalibration), &bytes_read);
+        f_close(&file_);
         
         if (fr != FR_OK || bytes_read != sizeof(SystemCalibration)) {
-            if (g_logger) g_logger->PrintLine("Cal: Read error, using defaults");
+            if (g_logger) {
+                g_logger->PrintLine("Cal: Read error (fr=%d, read=%u, expect=%u)", 
+                    (int)fr, (unsigned int)bytes_read, (unsigned int)sizeof(SystemCalibration));
+            }
             calibration_.ResetToDefaults();
             return false;
         }
+        
+        // Copy from DMA buffer to temp struct for validation
+        SystemCalibration temp;
+        memcpy(&temp, dma_buffer.data, sizeof(SystemCalibration));
         
         // Validate
         if (!temp.IsValid()) {
-            if (g_logger) g_logger->PrintLine("Cal: Invalid data, using defaults");
+            if (g_logger) {
+                g_logger->PrintLine("Cal: Invalid data, using defaults");
+                g_logger->PrintLine("  Magic: 0x%08X (expect 0x%08X)", 
+                    (unsigned int)temp.magic, (unsigned int)kCalibrationMagic);
+                g_logger->PrintLine("  Version: %d (expect %d)", 
+                    (int)temp.version, (int)kCalibrationVersion);
+                g_logger->PrintLine("  Checksum: %u (calc: %u)", 
+                    (unsigned int)temp.checksum, (unsigned int)temp.CalculateChecksum());
+            }
             calibration_.ResetToDefaults();
             return false;
         }
@@ -78,9 +104,13 @@ public:
         if (g_logger) {
             g_logger->PrintLine("Cal: Loaded OK");
             for (int i = 0; i < 4; i++) {
-                g_logger->PrintLine("  CV%d: %.4f - %.4f", i + 1, 
-                    calibration_.cv_inputs[i].min,
-                    calibration_.cv_inputs[i].max);
+                // Use integer formatting for floats (embedded platform)
+                int min_whole = static_cast<int>(calibration_.cv_inputs[i].min);
+                int min_frac = static_cast<int>((calibration_.cv_inputs[i].min - min_whole) * 10000);
+                int max_whole = static_cast<int>(calibration_.cv_inputs[i].max);
+                int max_frac = static_cast<int>((calibration_.cv_inputs[i].max - max_whole) * 10000);
+                g_logger->PrintLine("  CV%d: %d.%04d - %d.%04d", i + 1, 
+                    min_whole, min_frac, max_whole, max_frac);
             }
         }
         
@@ -111,25 +141,51 @@ public:
         }
         memcpy(dma_buffer.data, &calibration_, sizeof(SystemCalibration));
         
-        // Write to file
-        FIL file;
-        FRESULT fr = f_open(&file, kCalibrationFilePath, FA_WRITE | FA_CREATE_ALWAYS);
+        // Write to file (use DMA-aligned file handle)
+        FRESULT fr = f_open(&file_, kCalibrationFilePath, FA_WRITE | FA_CREATE_ALWAYS);
         if (fr != FR_OK) {
             if (g_logger) g_logger->PrintLine("Cal: Open failed: %d", (int)fr);
             return false;
         }
         
         UINT bytes_written;
-        fr = f_write(&file, dma_buffer.data, sizeof(SystemCalibration), &bytes_written);
-        f_close(&file);
-        
+        fr = f_write(&file_, dma_buffer.data, sizeof(SystemCalibration), &bytes_written);
         if (fr != FR_OK || bytes_written != sizeof(SystemCalibration)) {
-            if (g_logger) g_logger->PrintLine("Cal: Write failed");
+            if (g_logger) g_logger->PrintLine("Cal: Write failed (fr=%d, wrote=%u)", 
+                (int)fr, (unsigned int)bytes_written);
+            f_close(&file_);
+            return false;
+        }
+        
+        // Close file (this flushes buffers to disk)
+        fr = f_close(&file_);
+        if (fr != FR_OK) {
+            if (g_logger) g_logger->PrintLine("Cal: Close failed: %d", (int)fr);
+            return false;
+        }
+        
+        // Verify file was written correctly
+        FILINFO fno;
+        fr = f_stat(kCalibrationFilePath, &fno);
+        if (fr != FR_OK || fno.fsize != sizeof(SystemCalibration)) {
+            if (g_logger) g_logger->PrintLine("Cal: Verify failed (fr=%d, size=%u)", 
+                (int)fr, (unsigned int)fno.fsize);
             return false;
         }
         
         modified_ = false;
-        if (g_logger) g_logger->PrintLine("Cal: Saved OK");
+        if (g_logger) {
+            g_logger->PrintLine("Cal: Saved OK (%u bytes)", (unsigned int)bytes_written);
+            g_logger->PrintLine("  Checksum: %u", (unsigned int)calibration_.checksum);
+            for (int i = 0; i < 4; i++) {
+                int min_whole = static_cast<int>(calibration_.cv_inputs[i].min);
+                int min_frac = static_cast<int>((calibration_.cv_inputs[i].min - min_whole) * 10000);
+                int max_whole = static_cast<int>(calibration_.cv_inputs[i].max);
+                int max_frac = static_cast<int>((calibration_.cv_inputs[i].max - max_whole) * 10000);
+                g_logger->PrintLine("  CV%d: %d.%04d - %d.%04d", i + 1, 
+                    min_whole, min_frac, max_whole, max_frac);
+            }
+        }
         
         return true;
     }
@@ -183,6 +239,7 @@ private:
     SystemCalibration calibration_;
     bool initialized_;
     bool modified_;
+    alignas(32) FIL file_;  // DMA-aligned file handle for SD operations
     
     void EnsureSystemDirectory() {
         // Try to create /system directory (ignore if exists)

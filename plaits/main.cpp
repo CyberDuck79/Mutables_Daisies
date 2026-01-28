@@ -260,14 +260,15 @@ void UpdateEncoder() {
   // released? Actually I removed the struct declaration too?
   // Let's restore the struct if Update uses it.
 
-  EncoderHardwareState hw_state = {inc, pressed, rising, 0};
+  uint32_t now = System::GetNow();
+  EncoderHardwareState hw_state = {inc, pressed, rising, 0, now};
 
   // Logic from previous iteration to fix Short vs Long press
   // on Release
   static bool encoder_button_last = false;
 
   if (!pressed && encoder_button_last) {
-    hw_state.press_duration = System::GetNow() - press_start;
+    hw_state.press_duration = now - press_start;
   }
   encoder_button_last = pressed;
 
@@ -631,7 +632,13 @@ int main(void) {
     // Update CVInputBank with new calibration
     cv_inputs.SetCalibration(&calibration_manager.GetCalibration());
     if (g_logger) {
-      g_logger->PrintLine("Cal CV%d: %.4f - %.4f", cv_index + 1, min_val, max_val);
+      // Use integer formatting for floats (embedded platform)
+      int min_whole = static_cast<int>(min_val);
+      int min_frac = static_cast<int>((min_val - min_whole) * 10000);
+      int max_whole = static_cast<int>(max_val);
+      int max_frac = static_cast<int>((max_val - max_whole) * 10000);
+      g_logger->PrintLine("Cal CV%d: %d.%04d - %d.%04d", cv_index + 1, 
+                          min_whole, min_frac, max_whole, max_frac);
     }
   };
 

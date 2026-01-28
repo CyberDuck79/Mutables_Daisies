@@ -224,7 +224,8 @@ private:
         // Value
         if (param.type != ParamType::SAVE && 
             param.type != ParamType::LOAD && 
-            param.type != ParamType::SUB) {
+            param.type != ParamType::SUB &&
+            param.type != ParamType::CALIBRATION) {
             param.FormatDisplayValue(siblings, sibling_count, param_index, buffer, sizeof(buffer));
             int value_len = strlen(buffer);
             int value_width = value_len * kFont7x10Width;
@@ -238,8 +239,9 @@ private:
             display_.WriteString(buffer, Font_7x10, !editing);
         }
         
-        // Submenu indicator for SUB type
-        if (param.type == ParamType::SUB) {
+        // Submenu indicator for SUB/CALIBRATION type
+        if (param.type == ParamType::SUB ||
+            param.type == ParamType::CALIBRATION) {
             display_.SetCursor(121, y + 1);
             display_.WriteString(">", Font_7x10, true);
         }
