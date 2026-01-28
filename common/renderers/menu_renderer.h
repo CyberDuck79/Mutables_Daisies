@@ -172,10 +172,11 @@ private:
             display_.DrawLine(0, y + 11, name_len * kFont7x10Width - 1, y + 11, true);
         }
         
-        // Value (skip for SAVE/LOAD/SUB)
+        // Value (skip for SAVE/LOAD/SUB/CALIBRATION)
         if (param.type != ParamType::SAVE && 
             param.type != ParamType::LOAD && 
-            param.type != ParamType::SUB) {
+            param.type != ParamType::SUB &&
+            param.type != ParamType::CALIBRATION) {
             FormatValue(param, buffer, sizeof(buffer));
             int value_len = strlen(buffer);
             int value_width = value_len * kFont7x10Width;
@@ -189,8 +190,11 @@ private:
             display_.WriteString(buffer, Font_7x10, !editing);
         }
         
-        // Submenu indicator
-        if (param.type == ParamType::SUB || param.type == ParamType::SAVE || param.type == ParamType::LOAD) {
+        // Submenu indicator (action items that open special modes)
+        if (param.type == ParamType::SUB || 
+            param.type == ParamType::SAVE || 
+            param.type == ParamType::LOAD ||
+            param.type == ParamType::CALIBRATION) {
             display_.SetCursor(121, y + 1);
             display_.WriteString(">", Font_7x10, true);
         }

@@ -189,6 +189,17 @@ TEST(CVMappingProcessor, RebuildCacheFindsMappedParams) {
   // worked
 }
 
+// Create a test calibration that does identity mapping (no scaling)
+static SystemCalibration CreateTestCalibration() {
+  SystemCalibration cal;
+  for (int i = 0; i < 4; i++) {
+    cal.cv_inputs[i].min = 0.0f;
+    cal.cv_inputs[i].max = 1.0f;
+  }
+  cal.UpdateChecksum();
+  return cal;
+}
+
 // Helper to settle filter state by repeatedly calling Update
 void SettleCV(CVInputBank &cv, float v0, float v1, float v2, float v3) {
   // CVInputBank doesn't have Process(); UpdateRawValues updates filter
@@ -205,8 +216,10 @@ TEST(CVMappingProcessor, ProcessCVMappingsUpdatesValue) {
   p.mapping.plugged = false;
   p.value = 0.0f;
 
-  // CV Input
+  // CV Input with identity calibration for testing
   CVInputBank cv_inputs;
+  static SystemCalibration test_cal = CreateTestCalibration();
+  cv_inputs.SetCalibration(&test_cal);
   SettleCV(cv_inputs, 0.75f, 0, 0, 0); // CV1 = 0.75
 
   CVMappingProcessor processor;
@@ -226,8 +239,10 @@ TEST(CVMappingProcessor, ProcessCVMappingsSubmenu) {
 
   Parameter sub = Parameter::Sub("Sub", &child, 1);
 
-  // CV Input
+  // CV Input with identity calibration for testing
   CVInputBank cv_inputs;
+  static SystemCalibration test_cal = CreateTestCalibration();
+  cv_inputs.SetCalibration(&test_cal);
   SettleCV(cv_inputs, 0, 0.33f, 0, 0); // CV2 = 0.33
 
   CVMappingProcessor processor;

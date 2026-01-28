@@ -1,12 +1,14 @@
 #pragma once
 
 #include "daisy_patch.h"
+#include "calibration.h"
 #include "parameter.h"
 #include "ui_state.h"
 #include "constants.h"
 #include "renderers/menu_renderer.h"
 #include "renderers/mapping_submenu_renderer.h"
 #include "renderers/preset_renderer.h"
+#include "renderers/calibration_renderer.h"
 #include <cstdio>
 #include <cstring>
 
@@ -155,6 +157,17 @@ public:
         if (!hw_) return;
         PresetRenderer<decltype(hw_->display)> renderer(hw_->display);
         renderer.RenderMessage(title, message, success);
+    }
+    
+    //=========================================================================
+    // Calibration Rendering (delegated to CalibrationRenderer)
+    //=========================================================================
+    
+    void RenderCalibration(const MenuState& menu, const SystemCalibration& calibration,
+                          float current_raw_cv) {
+        if (!hw_) return;
+        CalibrationRenderer<decltype(hw_->display)> renderer(hw_->display);
+        renderer.Render(menu, calibration, current_raw_cv);
     }
     
 private:
