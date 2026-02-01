@@ -11,6 +11,15 @@
 #include <cmath>
 #include <cstring>
 
+// Debug functions from wavetable_engine.cc (in plaits namespace)
+namespace plaits {
+  extern int WavetableEngine_GetZIntegral();
+  extern const int16_t* WavetableEngine_GetWavePtr();
+  extern int16_t WavetableEngine_GetWaveSample();
+  extern const uint8_t* Voice_GetDebugWtLoadPtr();
+  extern int Voice_GetDebugWtLoadCount();
+}
+
 namespace mutables_plaits {
 
 using namespace mutables;

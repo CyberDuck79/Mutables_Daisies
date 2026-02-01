@@ -240,14 +240,19 @@ public:
      * Get pointer to user data for an engine slot
      * Implements plaits::UserDataProvider interface
      * This is the main interface used by Voice::LoadUserData()
+     * NOTE: This is called from the audio callback - NO LOGGING HERE!
      * @param slot Engine slot number
      * @return Pointer to data if loaded, nullptr otherwise
      */
     const uint8_t* ptr(int slot) const override {
-        if (!SlotHasUserData(slot)) return nullptr;
+        if (!SlotHasUserData(slot)) {
+            return nullptr;
+        }
         
         Target target = SlotToTarget(slot);
-        if (!loaded_[target]) return nullptr;
+        if (!loaded_[target]) {
+            return nullptr;
+        }
         
         return data_[target];
     }
@@ -414,7 +419,8 @@ private:
     char base_path_[64];
     
     // Data buffers for each target (final storage, can be in any RAM)
-    uint8_t data_[NUM_TARGETS][DATA_SIZE];
+    // Must be aligned for int16_t access since wavetable data is accessed as int16_t
+    alignas(4) uint8_t data_[NUM_TARGETS][DATA_SIZE];
     
     // Loaded state for each target
     bool loaded_[NUM_TARGETS];
