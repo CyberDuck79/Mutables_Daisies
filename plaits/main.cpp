@@ -1,3 +1,4 @@
+#include "../common/application_context.h"
 #include "../common/calibration_manager.h"
 #include "../common/constants.h"
 #include "../common/controllers/encoder_controller.h"
@@ -63,15 +64,14 @@ int bank_held_index = 0;
 int engine_held_index = 0;
 bool sample_hold_pending = false; // Flag set on NoteOn to trigger sampling
 
-// File browser state for USER_DATA selection
-static constexpr int MAX_USER_DATA_FILES = 32;
-static char user_data_files[MAX_USER_DATA_FILES][32];
-static int user_data_file_count = 0;
+// ApplicationContext pointer for file browser callback
+// Set in main() after ApplicationContext is created
+static ApplicationContext* g_app_ctx = nullptr;
 
-// Callback for file browser display
-const char *GetUserDataFileNameCallback(int index) {
-  if (index >= 0 && index < user_data_file_count) {
-    return user_data_files[index];
+// Callback for file browser display (uses ApplicationContext's file list)
+const char* GetUserDataFileNameCallback(int index) {
+  if (g_app_ctx) {
+    return g_app_ctx->GetUserDataFileName(index);
   }
   return nullptr;
 }
@@ -502,165 +502,49 @@ int main(void) {
   // Register user data manager as the global provider for
   // Plaits
   plaits::g_user_data_provider = &user_data_manager;
+  
+  // Connect user data manager to module for ApplicationContext integration
+  plaits_module.SetUserDataManager(&user_data_manager);
 
-  // Initialize Encoder Controller Callbacks
-  EncoderCallbacks callbacks;
-
-  callbacks.on_save_preset = [&]() {
-    // Name is already validated by controller/menu before
-    // calling this
-    char final_name[MenuState::MAX_PRESET_NAME_LEN + 1];
-    menu.GetFinalPresetName(final_name, sizeof(final_name));
-
-    if (!preset_manager.IsSDAvailable()) {
-      display.RenderMessage("Error", "No SD Card");
-    } else {
-      hw.StopAudio();
-      bool success =
-          preset_manager.SavePreset(final_name, plaits_module.GetParameters(),
-                                    plaits_module.GetParameterCount());
-      hw.StartAudio(AudioCallback);
-      display.RenderMessage(success ? "Saved!" : "Error",
-                            success ? final_name : "Save failed");
-    }
-    hw.display.Update();
-    daisy::System::Delay(kMessageDisplayDelayMs);
-  };
-
-  callbacks.on_scan_presets = [&]() -> int {
-    if (!preset_manager.IsSDAvailable()) {
-      display.RenderMessage("Error", "No SD Card");
-      hw.display.Update();
-      daisy::System::Delay(kMessageDisplayDelayMs);
-      return 0;
-    }
-    return preset_manager.ScanPresets();
-  };
-
-  callbacks.on_load_preset = [&](int index) {
-    const char *name = preset_manager.GetPresetName(index);
-    if (!name)
-      return;
-
-    hw.StopAudio();
-    bool success = preset_manager.LoadPreset(
-        name, plaits_module.GetParameters(), plaits_module.GetParameterCount());
-    if (success) {
-      // Reload user data logic
-      auto params = plaits_module.GetParameters();
-      for (size_t i = 0; i < plaits_module.GetParameterCount(); i++) {
-        if (params[i].type == ParamType::SUB && params[i].children) {
-          for (size_t c = 0; c < params[i].child_count; c++) {
-            auto &child = params[i].children[c];
-            if (child.type == ParamType::USER_DATA) {
-              UserDataManager::Target target =
-                  static_cast<UserDataManager::Target>(child.user_data_target);
-              if (child.user_data_filename[0])
-                user_data_manager.LoadTarget(target, child.user_data_filename);
-              else
-                user_data_manager.LoadDefaultForTarget(target);
-            }
-          }
-        }
-      }
-      plaits_module.ReloadUserData();
-    }
-    hw.StartAudio(AudioCallback);
-    display.RenderMessage(success ? "Loaded!" : "Error",
-                          success ? name : "Load failed");
-    hw.display.Update();
-    daisy::System::Delay(kMessageDisplayDelayMs);
-  };
-
-  // on_enter_sub not strictly needed if controller handles
-  // simple subs, but let's implement if needed
-  // implementation in controller checks for it? Controller:
-  // if (param.type == ParamType::SUB) ... menu.EnterSub...
-  // Wait, controller header lines 206-212 handle SUB
-  // internally without callback. The callback on_enter_sub
-  // is defined but unused? Or used for custom subs? Let's
-  // leave it empty or minimal.
-  callbacks.on_enter_sub = [](mutables_ui::Parameter *param) {};
-
-  callbacks.on_user_data_browser = [&](int target_int) {
-    UserDataManager::Target target =
-        static_cast<UserDataManager::Target>(target_int);
-    user_data_file_count = user_data_manager.ListFiles(target, user_data_files,
-                                                       MAX_USER_DATA_FILES);
-    menu.EnterFileBrowser(menu.selected_param, user_data_file_count);
-  };
-
-  callbacks.on_user_data_selected = [&](mutables_ui::Parameter *param,
-                                        int file_idx) {
-    if (file_idx == 0) {
-      // Default
-      param->SetUserDataFile("");
-    } else if (file_idx > 0 && file_idx <= user_data_file_count) {
-      param->SetUserDataFile(user_data_files[file_idx - 1]);
-    }
-
-    UserDataManager::Target target =
-        static_cast<UserDataManager::Target>(param->user_data_target);
-    const char *filename =
-        param->user_data_filename[0] ? param->user_data_filename : nullptr;
-
-    hw.StopAudio();
-    bool success = filename ? user_data_manager.LoadTarget(target, filename)
-                            : user_data_manager.LoadDefaultForTarget(target);
-    plaits_module.ReloadUserData();
-    hw.StartAudio(AudioCallback);
-
-    display.RenderMessage(success ? "Loaded!" : "Error",
-                          filename ? filename : "Default");
-    hw.display.Update();
-    daisy::System::Delay(kMessageDisplayDelayMs);
-  };
-
-  callbacks.on_display_message = [&](const char *title, const char *msg) {
-    display.RenderMessage(title, msg);
-    hw.display.Update();
-    daisy::System::Delay(kMessageDisplayDelayMs);
-  };
-
-  // Calibration callbacks
-  callbacks.on_get_raw_cv = [&](int cv_index) -> float {
-    return cv_inputs.GetRawADC(cv_index);
-  };
-
-  callbacks.on_calibration_complete = [&](int cv_index, float min_val, float max_val) {
-    calibration_manager.SetCVCalibration(cv_index, min_val, max_val);
-    // Update CVInputBank with new calibration
-    cv_inputs.SetCalibration(&calibration_manager.GetCalibration());
-    if (g_logger) {
-      // Use integer formatting for floats (embedded platform)
-      int min_whole = static_cast<int>(min_val);
-      int min_frac = static_cast<int>((min_val - min_whole) * 10000);
-      int max_whole = static_cast<int>(max_val);
-      int max_frac = static_cast<int>((max_val - max_whole) * 10000);
-      g_logger->PrintLine("Cal CV%d: %d.%04d - %d.%04d", cv_index + 1, 
-                          min_whole, min_frac, max_whole, max_frac);
-    }
-  };
-
-  callbacks.on_calibration_save = [&]() {
-    hw.StopAudio();
-    bool success = calibration_manager.Save();
-    hw.StartAudio(AudioCallback);
-    display.RenderMessage(success ? "Saved!" : "Error",
-                          success ? "Calibration" : "Save failed");
-    hw.display.Update();
-    daisy::System::Delay(kMessageDisplayDelayMs);
-  };
-
-  callbacks.on_calibration_reset_all = [&]() {
-    calibration_manager.ResetAll();
-    cv_inputs.SetCalibration(&calibration_manager.GetCalibration());
-    display.RenderMessage("Reset", "Defaults loaded");
-    hw.display.Update();
-    daisy::System::Delay(kMessageDisplayDelayMs);
-  };
-
-  encoder_controller.SetCallbacks(callbacks);
+  //===========================================================================
+  // ApplicationContext - Simplifies callback setup
+  //===========================================================================
+  // Instead of manually defining 10+ callbacks (~150 lines), we use
+  // ApplicationContext to generate standard callbacks automatically.
+  //
+  // This pattern should be replicated in all new ports:
+  // 1. Create ApplicationContext with all shared components
+  // 2. Set audio_callback for StopAudio/StartAudio handling
+  // 3. Call BuildStandardCallbacks() to get all callbacks
+  //
+  // If your module has user data, implement GetUserDataManager() and
+  // OnPresetLoaded() in your ModuleBase subclass (see plaits_port.h).
+  //===========================================================================
+  
+  ApplicationContext app_ctx(
+      hw,                    // DaisyPatch hardware
+      plaits_module,         // Module (implements ModuleBase)
+      menu,                  // UI navigation state
+      display,               // OLED display controller
+      cv_inputs,             // CV input processing
+      cv_processor,          // CV/MIDI -> Parameter mapping
+      midi_processor,        // MIDI channel filtering
+      preset_manager,        // Preset save/load
+      calibration_manager,   // CV calibration
+      encoder_controller     // Encoder state machine
+  );
+  
+  // Set global pointer for file browser callback
+  g_app_ctx = &app_ctx;
+  
+  // IMPORTANT: Set audio callback before BuildStandardCallbacks()
+  // This is needed for SD operations that require audio to be stopped
+  app_ctx.audio_callback = AudioCallback;
+  
+  // Build and register all standard callbacks in one call!
+  // This replaces ~150 lines of manual callback definitions
+  encoder_controller.SetCallbacks(app_ctx.BuildStandardCallbacks());
+  
   midi_processor.Init(0); // Omni by default, will be updated in loop
 
   menu.param_count = plaits_module.GetParameterCount();

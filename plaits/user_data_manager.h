@@ -4,6 +4,7 @@
 #include "fatfs.h"
 #include "../eurorack/plaits/user_data.h"
 #include "../common/sd_dma_buffer.h"  // Shared DMA buffer for SD operations
+#include "../common/user_data_manager_base.h"  // Base interface for ApplicationContext
 #include <cstring>
 #include <cstdint>
 
@@ -15,7 +16,9 @@ namespace mutables_plaits {
 /**
  * UserDataManager - Manages user data for Plaits engines
  * 
- * Implements plaits::UserDataProvider to integrate with the Voice class.
+ * Implements:
+ * - plaits::UserDataProvider: Integration with Plaits Voice class
+ * - mutables_ui::UserDataManagerBase: Integration with ApplicationContext
  * 
  * User data targets (engine slots):
  *   0-1: Not used
@@ -38,7 +41,8 @@ namespace mutables_plaits {
  * IMPORTANT: SD card DMA requires buffers in AXI SRAM (not DTCMRAM).
  * Uses the shared DMA buffer from sd_dma_buffer.h.
  */
-class UserDataManager : public plaits::UserDataProvider {
+class UserDataManager : public plaits::UserDataProvider, 
+                        public mutables_ui::UserDataManagerBase {
 public:
     // User data size (matches original Plaits)
     static constexpr size_t DATA_SIZE = 4096;
@@ -316,6 +320,56 @@ public:
         
         f_closedir(&dir);
         return count;
+    }
+    
+    //=========================================================================
+    // UserDataManagerBase Interface Implementation
+    //=========================================================================
+    // These methods allow ApplicationContext to work with this manager
+    // without knowing Plaits-specific details. They convert int -> Target.
+    //=========================================================================
+    
+    /**
+     * List files for a target (UserDataManagerBase interface)
+     * @param target Target index (cast from Target enum)
+     * @param files Output array of filenames
+     * @param max_files Maximum number of files
+     * @return Number of files found
+     */
+    int ListFiles(int target, char files[][32], int max_files) override {
+        if (target < 0 || target >= static_cast<int>(NUM_TARGETS)) return 0;
+        return ListFiles(static_cast<Target>(target), files, static_cast<size_t>(max_files), 32);
+    }
+    
+    /**
+     * Load a specific file (UserDataManagerBase interface)
+     * @param target Target index
+     * @param filename Filename to load
+     * @return true if successful
+     */
+    bool LoadTarget(int target, const char* filename) override {
+        if (target < 0 || target >= static_cast<int>(NUM_TARGETS)) return false;
+        return LoadTarget(static_cast<Target>(target), filename);
+    }
+    
+    /**
+     * Load default for target (UserDataManagerBase interface)
+     * @param target Target index
+     * @return true if successful
+     */
+    bool LoadDefaultForTarget(int target) override {
+        if (target < 0 || target >= static_cast<int>(NUM_TARGETS)) return false;
+        return LoadDefaultForTarget(static_cast<Target>(target));
+    }
+    
+    /**
+     * Get current file for target (UserDataManagerBase interface)
+     * @param target Target index
+     * @return Current filename (empty if using default)
+     */
+    const char* GetCurrentFile(int target) const override {
+        if (target < 0 || target >= static_cast<int>(NUM_TARGETS)) return "";
+        return GetCurrentFile(static_cast<Target>(target));
     }
     
     /**
