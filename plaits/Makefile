@@ -97,9 +97,8 @@ OPT = -O2
 # Add optimization flags (matching stmlib's approach)
 CPPFLAGS += -funroll-loops -finline -finline-functions-called-once
 
-# Create a wrapper for user_data.h to avoid hardware-specific code
-# This needs to be done before compiling
-$(shell echo '#include "user_data_stub.h"' > plaits/user_data.h 2>/dev/null || true)
+# NOTE: We use the real plaits/user_data.h from eurorack, not a stub.
+# The PLAITS_DAISY define enables the UserDataProvider-based implementation.
 
 # Add .cc source handling
 CC_OBJ = $(addprefix $(BUILD_DIR)/,$(notdir $(PLAITS_CC_SOURCES:.cc=.o)))
