@@ -6,6 +6,7 @@
 #include "audio_processors.h"
 #include "cv_modulator.h"
 #include "polyphonic_voice.h"
+#include "user_data_manager.h"
 #include <array>
 
 // Forward declarations for Plaits classes
@@ -26,7 +27,9 @@ public:
   PlaitsPort();
   ~PlaitsPort() override;
 
-  // ModuleBase interface
+  //===========================================================================
+  // ModuleBase Interface - Required implementations
+  //===========================================================================
   const char *GetName() const override { return "Plaits"; }
   const char *GetShortName() const override { return "plaits"; }
 
@@ -38,6 +41,32 @@ public:
   void ProcessGate(int gate_index, bool state) override;
   float GetCVOutput(int cv_index) override;
 
+  //===========================================================================
+  // ModuleBase Interface - User Data Support
+  //===========================================================================
+  // Plaits has user-loadable data: FM banks, wavetables, wave terrains.
+  // These methods integrate with ApplicationContext for preset loading.
+  //===========================================================================
+  
+  // Return our user data manager for ApplicationContext callbacks
+  mutables_ui::UserDataManagerBase* GetUserDataManager() override {
+    return user_data_manager_;
+  }
+  
+  // Set the user data manager (called from main.cpp after initialization)
+  void SetUserDataManager(UserDataManager* udm) {
+    user_data_manager_ = udm;
+  }
+  
+  // Called after preset load or user data change - reloads data into DSP
+  void OnPresetLoaded() override {
+    ReloadUserData();
+  }
+
+  //===========================================================================
+  // Plaits-Specific Methods
+  //===========================================================================
+  
   // Set CV modulation values (called from main before Process)
   void SetCVModulations(float frequency_cv, float timbre_cv, float morph_cv);
 
@@ -52,6 +81,9 @@ private:
   static constexpr size_t kBlockSize = 96;
   static constexpr size_t kBufferSize = 32768; // Buffer for Plaits engines
   static constexpr int kMaxPolyVoices = 4;
+
+  // User data manager (set via SetUserDataManager, owned by main.cpp)
+  UserDataManager* user_data_manager_ = nullptr;
 
   // Plaits engine - primary voice (voice 0)
   plaits::Voice *voice_;
