@@ -5,6 +5,7 @@
 #include "../common/cv_input.h"
 #include "../common/cv_mapping_processor.h"
 #include "../common/display.h"
+#include "../common/midi_dispatcher.h"
 #include "../common/midi_processor.h"
 #include "../common/parameter.h"
 #include "../common/preset_manager.h"
@@ -34,6 +35,7 @@ Display display;
 CVInputBank cv_inputs;
 CVMappingProcessor cv_processor;
 MIDIProcessor midi_processor;
+MIDIDispatcher midi_dispatcher;
 EncoderController encoder_controller(cv_processor);
 
 // SD Card / Presets / User Data / Calibration
@@ -147,37 +149,14 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out,
   // Pass filtered CV values and trigger status
   cv_processor.ProcessCVMappings(cv_inputs, kCVHysteresis, do_sample);
 
-  // Extract modulation signals for Plaits specific inputs
-  // (Frequency/Timbre/Morph)
-  if (params[2].mapping.plugged &&
-      params[2].mapping.IsCVSource()) { // Frequency
-    float cv = cv_inputs.GetFiltered(params[2].mapping.GetCVIndex());
-    frequency_cv = cv - params[2].mapping.offset;
-  }
-  if (params[4].mapping.plugged && params[4].mapping.IsCVSource()) { // Timbre
-    float cv = cv_inputs.GetFiltered(params[4].mapping.GetCVIndex());
-    timbre_cv = cv - params[4].mapping.offset;
-  }
-  if (params[5].mapping.plugged && params[5].mapping.IsCVSource()) { // Morph
-    float cv = cv_inputs.GetFiltered(params[5].mapping.GetCVIndex());
-    morph_cv = cv - params[5].mapping.offset;
-  }
+  // Extract modulation signals for Plaits specific inputs using helper
+  // Indices: 2=Frequency, 4=Timbre, 5=Morph
+  frequency_cv = cv_processor.GetModulationSignal(params[2]);
+  timbre_cv = cv_processor.GetModulationSignal(params[4]);
+  morph_cv = cv_processor.GetModulationSignal(params[5]);
 
   // Handle unmapped CV type parameters - set to 0
-  for (size_t i = 0; i < param_count; i++) {
-    if (params[i].type == ParamType::CV && !params[i].mapping.IsCVSource()) {
-      params[i].SetNormalizedWithHysteresis(0.0f, kCVHysteresis);
-    }
-    // Also check children in SUB menus
-    if (params[i].type == ParamType::SUB && params[i].children) {
-      for (int j = 0; j < params[i].child_count; j++) {
-        auto &child = params[i].children[j];
-        if (child.type == ParamType::CV && !child.mapping.IsCVSource()) {
-          child.SetNormalizedWithHysteresis(0.0f, kCVHysteresis);
-        }
-      }
-    }
-  }
+  CVMappingProcessor::ZeroUnmappedCVParams(params, param_count, kCVHysteresis);
 
   // Clear sample-and-hold pending flag after processing
   sample_hold_pending = false;
@@ -316,63 +295,7 @@ void UpdateEncoder() {
                             plaits_module.GetParameterCount());
 }
 
-void ProcessMidi() {
-  while (hw.midi.HasEvents()) {
-    MidiEvent event = hw.midi.PopEvent();
-
-    // Handle MIDI clock (system realtime, not
-    // channel-dependent)
-    if (event.type == SystemRealTime) {
-      // MIDI Clock = 0xF8
-      if (event.srt_type == TimingClock) {
-        plaits_module.OnMIDIClock();
-      }
-    }
-
-    // MIDI Thru: Forward all events to output regardless of
-    // channel
-    if (event.type == NoteOn || event.type == NoteOff ||
-        event.type == ControlChange) {
-      uint8_t out_bytes[3];
-      uint8_t status_type = 0;
-      if (event.type == NoteOn)
-        status_type = 0x90;
-      else if (event.type == NoteOff)
-        status_type = 0x80;
-      else if (event.type == ControlChange)
-        status_type = 0xB0;
-
-      size_t size = MIDIProcessor::BuildThruMessage(
-          status_type, event.channel, event.data[0], event.data[1], out_bytes);
-      if (size > 0) {
-        hw.midi.SendMessage(out_bytes, size);
-      }
-    }
-
-    // Update MIDI channel from module settings
-    midi_processor.SetChannel(plaits_module.GetMidiChannel());
-
-    if (!midi_processor.ShouldProcess(event.channel))
-      continue;
-
-    if (event.type == NoteOn) {
-      NoteOnEvent note = event.AsNoteOn();
-      if (note.velocity > 0) {
-        // Trigger sample-and-hold for Bank/Engine CV
-        sample_hold_pending = true;
-        plaits_module.NoteOn(note.note, note.velocity);
-      } else {
-        plaits_module.NoteOff(note.note, 0);
-      }
-    } else if (event.type == NoteOff) {
-      NoteOffEvent note = event.AsNoteOff();
-      plaits_module.NoteOff(note.note, note.velocity);
-    } else if (event.type == ControlChange) {
-      ControlChangeEvent cc = event.AsControlChange();
-      midi_processor.SetCC(cc.control_number, cc.value);
-    }
-  }
-}
+// MIDI processing now handled by MIDIDispatcher - setup in main()
 
 // Helper function for preset list display
 const char *GetPresetNameCallback(int index) {
@@ -545,7 +468,23 @@ int main(void) {
   // This replaces ~150 lines of manual callback definitions
   encoder_controller.SetCallbacks(app_ctx.BuildStandardCallbacks());
   
-  midi_processor.Init(0); // Omni by default, will be updated in loop
+  midi_processor.Init(0); // Omni by default, will be updated via dispatcher
+  
+  // Configure MIDIDispatcher callbacks
+  midi_dispatcher.SetChannelCallback([&]() { 
+    return plaits_module.GetMidiChannel(); 
+  });
+  midi_dispatcher.SetClockCallback([&]() { 
+    plaits_module.OnMIDIClock(); 
+  });
+  midi_dispatcher.SetNoteOnCallback([&](uint8_t note, uint8_t velocity) {
+    sample_hold_pending = true;
+    plaits_module.NoteOn(note, velocity);
+  });
+  midi_dispatcher.SetNoteOffCallback([&](uint8_t note, uint8_t velocity) {
+    plaits_module.NoteOff(note, velocity);
+  });
+  // CC handling done via midi_processor.SetCC() internally by dispatcher
 
   menu.param_count = plaits_module.GetParameterCount();
   display.Init(&hw,
@@ -564,7 +503,7 @@ int main(void) {
   uint32_t last_display_update = 0;
   while (1) {
     hw.midi.Listen();
-    ProcessMidi();
+    midi_dispatcher.Process(hw, midi_processor);
 
     hw.ProcessAllControls();
     UpdateEncoder();

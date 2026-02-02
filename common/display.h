@@ -25,7 +25,11 @@ using LogoDrawFunc = void (*)(daisy::OledDisplay<daisy::SSD130x4WireSpi128x64Dri
 
 class Display {
 public:
-    Display() : hw_(nullptr), logo_draw_func_(nullptr), cpu_overload_(false) {}
+    Display() : hw_(nullptr), logo_draw_func_(nullptr), cpu_overload_(false),
+                pending_message_expire_(0) {
+        pending_message_.title[0] = '\0';
+        pending_message_.message[0] = '\0';
+    }
     
     void Init(daisy::DaisyPatch* hw, LogoDrawFunc logo_func = nullptr) {
         hw_ = hw;
@@ -35,6 +39,68 @@ public:
     // Set CPU overload flag (call from main loop with CpuMonitor::IsOverloaded())
     void SetCpuOverload(bool overloaded) {
         cpu_overload_ = overloaded;
+    }
+    
+    //=========================================================================
+    // Non-Blocking Message Queue
+    //=========================================================================
+    
+    /**
+     * Queue a temporary message to display.
+     * The message will be shown for the specified duration without blocking.
+     * Call UpdatePendingMessages() each frame to handle display/expiration.
+     * 
+     * @param title Message title (max 15 chars)
+     * @param message Message body (max 31 chars)
+     * @param duration_ms How long to show the message (default 1500ms)
+     * @param success If true, normal display; if false, error styling
+     */
+    void QueueMessage(const char* title, const char* message, 
+                     uint32_t duration_ms = 1500, bool success = true) {
+        strncpy(pending_message_.title, title, sizeof(pending_message_.title) - 1);
+        pending_message_.title[sizeof(pending_message_.title) - 1] = '\0';
+        strncpy(pending_message_.message, message, sizeof(pending_message_.message) - 1);
+        pending_message_.message[sizeof(pending_message_.message) - 1] = '\0';
+        pending_message_.success = success;
+        pending_message_expire_ = daisy::System::GetNow() + duration_ms;
+    }
+    
+    /**
+     * Check if there's a pending message being displayed.
+     * @return true if a message is currently showing
+     */
+    bool HasPendingMessage() const {
+        return pending_message_expire_ > 0 && 
+               daisy::System::GetNow() < pending_message_expire_;
+    }
+    
+    /**
+     * Update and render pending messages. Call this each frame.
+     * If a message is pending, it renders the message and returns true.
+     * If no message or message expired, returns false (caller should render normal UI).
+     * 
+     * @return true if a message was rendered (skip normal UI), false otherwise
+     */
+    bool UpdatePendingMessages() {
+        if (!hw_) return false;
+        
+        uint32_t now = daisy::System::GetNow();
+        if (pending_message_expire_ > 0 && now < pending_message_expire_) {
+            // Render the pending message
+            RenderMessage(pending_message_.title, pending_message_.message, 
+                         pending_message_.success);
+            hw_->display.Update();
+            return true;
+        }
+        
+        // Clear expired message
+        if (pending_message_expire_ > 0 && now >= pending_message_expire_) {
+            pending_message_expire_ = 0;
+            pending_message_.title[0] = '\0';
+            pending_message_.message[0] = '\0';
+        }
+        
+        return false;
     }
     
     //=========================================================================
@@ -174,6 +240,15 @@ private:
     daisy::DaisyPatch* hw_;
     LogoDrawFunc logo_draw_func_;
     bool cpu_overload_;
+    
+    // Non-blocking message queue
+    struct PendingMessage {
+        char title[16];
+        char message[32];
+        bool success;
+    };
+    PendingMessage pending_message_;
+    uint32_t pending_message_expire_;
     
     // Draw CPU overload indicator (flashing "!" in top-right corner)
     void DrawCpuOverloadIndicator() {
