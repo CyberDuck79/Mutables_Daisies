@@ -172,6 +172,55 @@ public:
     return base_value;
   }
 
+  //===========================================================================
+  // Modulation Signal Extraction
+  //===========================================================================
+  
+  /**
+   * Get the raw modulation signal for a parameter.
+   * Returns the CV value minus the offset (attenuverter center point).
+   * This is useful for parameters that need the raw bipolar modulation signal
+   * rather than the mapped 0-1 value (e.g., Plaits Frequency/Timbre/Morph CV).
+   * 
+   * @param param The parameter to get modulation for
+   * @return Modulation signal (-1 to +1 range typically), or 0 if not CV-mapped
+   */
+  float GetModulationSignal(const Parameter& param) const {
+    if (param.mapping.plugged && param.mapping.IsCVSource()) {
+      int idx = param.mapping.GetCVIndex();
+      if (idx >= 0 && idx < 4) {
+        return last_cv_values_[idx] - param.mapping.offset;
+      }
+    }
+    return 0.0f;
+  }
+  
+  /**
+   * Zero out unmapped CV-type parameters.
+   * CV parameters without a mapping source should read as 0, not retain stale values.
+   * Call this after ProcessCVMappings() in your main loop.
+   * 
+   * @param params Parameter array
+   * @param param_count Number of parameters
+   * @param hysteresis Hysteresis value for SetNormalizedWithHysteresis
+   */
+  static void ZeroUnmappedCVParams(Parameter* params, size_t param_count, float hysteresis) {
+    for (size_t i = 0; i < param_count; i++) {
+      if (params[i].type == ParamType::CV && !params[i].mapping.IsCVSource()) {
+        params[i].SetNormalizedWithHysteresis(0.0f, hysteresis);
+      }
+      // Also check children in SUB menus
+      if (params[i].type == ParamType::SUB && params[i].children) {
+        for (int j = 0; j < params[i].child_count; j++) {
+          auto& child = params[i].children[j];
+          if (child.type == ParamType::CV && !child.mapping.IsCVSource()) {
+            child.SetNormalizedWithHysteresis(0.0f, hysteresis);
+          }
+        }
+      }
+    }
+  }
+
   static int CalculateEnumFromCV(const Parameter &param, float cv_value) {
     const MappingConfig &m = param.mapping;
 

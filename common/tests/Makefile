@@ -10,7 +10,9 @@ SRCS = test_main.cpp \
        test_midi_processor.cpp \
        test_parameter_templates.cpp \
        test_encoder_controller.cpp \
-       test_application_context.cpp
+       test_application_context.cpp \
+       test_midi_dispatcher.cpp \
+       test_display_queue.cpp
 
 OBJS = $(SRCS:.cpp=.o)
 

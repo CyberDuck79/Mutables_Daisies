@@ -273,3 +273,129 @@ TEST(CVMappingProcessor, ProcessCCMappingsUpdatesValue) {
 
   EXPECT_FLOAT_EQ(p.value, 0.88f);
 }
+// ============================================================================
+// GetModulationSignal Tests
+// ============================================================================
+
+TEST(CVMappingProcessor, GetModulationSignalPluggedReturnsSignal) {
+  Parameter p = Parameter::Knob("Test");
+  p.mapping.source = MappingSource::CV1;
+  p.mapping.plugged = true;
+  p.mapping.offset = 0.5f;
+
+  // CV Input with identity calibration for testing
+  CVInputBank cv_inputs;
+  static SystemCalibration test_cal = CreateTestCalibration();
+  cv_inputs.SetCalibration(&test_cal);
+  SettleCV(cv_inputs, 0.75f, 0, 0, 0); // CV1 = 0.75
+
+  CVMappingProcessor processor;
+  processor.RebuildCache(&p, 1);
+  processor.ProcessCVMappings(cv_inputs, 0.001f);
+
+  // Modulation signal = CV (0.75) - Offset (0.5) = 0.25
+  float signal = processor.GetModulationSignal(p);
+  EXPECT_FLOAT_EQ(signal, 0.25f);
+}
+
+TEST(CVMappingProcessor, GetModulationSignalUnpluggedReturnsZero) {
+  Parameter p = Parameter::Knob("Test");
+  p.mapping.source = MappingSource::CV1;
+  p.mapping.plugged = false;  // Not plugged
+  p.mapping.offset = 0.5f;
+
+  CVMappingProcessor processor;
+  
+  // Even without processing, unplugged should return 0
+  float signal = processor.GetModulationSignal(p);
+  EXPECT_FLOAT_EQ(signal, 0.0f);
+}
+
+TEST(CVMappingProcessor, GetModulationSignalNoSourceReturnsZero) {
+  Parameter p = Parameter::Knob("Test");
+  p.mapping.source = MappingSource::NONE;
+  p.mapping.plugged = true;
+
+  CVMappingProcessor processor;
+  
+  float signal = processor.GetModulationSignal(p);
+  EXPECT_FLOAT_EQ(signal, 0.0f);
+}
+
+TEST(CVMappingProcessor, GetModulationSignalNegative) {
+  Parameter p = Parameter::Knob("Test");
+  p.mapping.source = MappingSource::CV2;
+  p.mapping.plugged = true;
+  p.mapping.offset = 0.7f;
+
+  CVInputBank cv_inputs;
+  static SystemCalibration test_cal = CreateTestCalibration();
+  cv_inputs.SetCalibration(&test_cal);
+  SettleCV(cv_inputs, 0, 0.3f, 0, 0); // CV2 = 0.3
+
+  CVMappingProcessor processor;
+  processor.RebuildCache(&p, 1);
+  processor.ProcessCVMappings(cv_inputs, 0.001f);
+
+  // Modulation signal = CV (0.3) - Offset (0.7) = -0.4
+  float signal = processor.GetModulationSignal(p);
+  EXPECT_FLOAT_EQ(signal, -0.4f);
+}
+
+// ============================================================================
+// ZeroUnmappedCVParams Tests
+// ============================================================================
+
+TEST(CVMappingProcessor, ZeroUnmappedCVParamsZeroesUnmapped) {
+  Parameter params[3] = {
+    Parameter::CV("Mapped"),
+    Parameter::CV("Unmapped"),
+    Parameter::Knob("NotCV")
+  };
+  
+  // First CV param is mapped
+  params[0].mapping.source = MappingSource::CV1;
+  params[0].value = 0.5f;
+  
+  // Second CV param is NOT mapped
+  params[1].mapping.source = MappingSource::NONE;
+  params[1].value = 0.75f;  // Should be zeroed
+  
+  // Third param is a KNOB, should not be touched
+  params[2].mapping.source = MappingSource::NONE;
+  params[2].value = 0.8f;
+  
+  CVMappingProcessor::ZeroUnmappedCVParams(params, 3, 0.001f);
+  
+  // Mapped CV should keep its value
+  EXPECT_FLOAT_EQ(params[0].value, 0.5f);
+  
+  // Unmapped CV should be zeroed
+  EXPECT_FLOAT_EQ(params[1].value, 0.0f);
+  
+  // KNOB should be untouched
+  EXPECT_FLOAT_EQ(params[2].value, 0.8f);
+}
+
+TEST(CVMappingProcessor, ZeroUnmappedCVParamsHandlesSubmenus) {
+  Parameter children[2] = {
+    Parameter::CV("ChildMapped"),
+    Parameter::CV("ChildUnmapped")
+  };
+  
+  children[0].mapping.source = MappingSource::CV3;
+  children[0].value = 0.6f;
+  
+  children[1].mapping.source = MappingSource::NONE;
+  children[1].value = 0.9f;  // Should be zeroed
+  
+  Parameter parent = Parameter::Sub("Parent", children, 2);
+  
+  CVMappingProcessor::ZeroUnmappedCVParams(&parent, 1, 0.001f);
+  
+  // Mapped child should keep value
+  EXPECT_FLOAT_EQ(children[0].value, 0.6f);
+  
+  // Unmapped child should be zeroed
+  EXPECT_FLOAT_EQ(children[1].value, 0.0f);
+}

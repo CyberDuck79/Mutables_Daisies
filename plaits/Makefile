@@ -84,7 +84,7 @@ C_DEFS += -DPLAITS_DAISY
 
 ifdef RELEASE
     # Release build: disable all debug logging
-    C_DEFS += -DRELEASE
+    C_DEFS += -DNDEBUG
 else
     # Debug build: enable CPU logging and debug output
     C_DEFS += -DDEBUG_LOGGING
