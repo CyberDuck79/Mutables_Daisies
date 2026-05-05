@@ -40,6 +40,10 @@ FatFSInterface fsi;
 PresetManager preset_manager;
 CalibrationManager calibration_manager;
 
+// Debug logger
+daisy::Logger<daisy::LOGGER_INTERNAL> logger;
+daisy::Logger<daisy::LOGGER_INTERNAL> *g_logger = &logger;
+
 // Audio buffers
 float *audio_in[4];
 float *audio_out[4];

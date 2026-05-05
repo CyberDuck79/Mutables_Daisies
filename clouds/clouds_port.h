@@ -2,6 +2,7 @@
 
 #include "../common/module_base.h"
 #include "../common/parameter.h"
+#include "../eurorack/clouds/dsp/frame.h"
 #include <array>
 #include <cstddef>
 

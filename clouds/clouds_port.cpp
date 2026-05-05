@@ -67,7 +67,8 @@ void CloudsPort::SetupParameters() {
   params_[6] = mutables_ui::Parameter::Sub("Mix", mix_params_.data(), kNumMixParams);
 
   // Freeze
-  params_[7] = mutables_ui::Parameter::Enum("Freeze", {"OFF", "ON"}, 2);
+  static const char *freeze_labels_[] = {"OFF", "ON"};
+  params_[7] = mutables_ui::Parameter::Enum("Freeze", freeze_labels_, 2);
 
   // Settings submenu
   settings_params_[0] = mutables_ui::Parameter::Enum(

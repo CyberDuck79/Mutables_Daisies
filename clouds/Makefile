@@ -30,7 +30,8 @@ CLOUDS_CC_SOURCES = \
 	$(CLOUDS_DIR)/mu_law.cc \
 	../eurorack/clouds/resources.cc \
 	$(STMLIB_DIR)/utils/random.cc \
-	$(STMLIB_DIR)/dsp/units.cc
+	$(STMLIB_DIR)/dsp/units.cc \
+	$(STMLIB_DIR)/dsp/atan.cc
 
 # Core location, and generic Makefile.
 SYSTEM_FILES_DIR = $(LIBDAISY_DIR)/core
