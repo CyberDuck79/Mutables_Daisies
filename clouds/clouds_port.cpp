@@ -129,12 +129,11 @@ void CloudsPort::Process(float **in, float **out, size_t size) {
     size_t block = (i + kBlockSize <= size) ? kBlockSize : (size - i);
 
     // Float → ShortFrame conversion (input)
-    // Use 32767.0f to avoid overflow at exactly 1.0 (32768 would overflow int16)
+    // Matches original: int16 = float * 32768.0f (no extra clamping)
+    // SoftConvert is applied inside GranularProcessor::Process()
     for (size_t j = 0; j < block; j++) {
-      input_frames_[j].l = static_cast<int16_t>(
-          std::clamp(in[0][i + j], -1.0f, 1.0f) * 32767.0f);
-      input_frames_[j].r = static_cast<int16_t>(
-          std::clamp(in[1][i + j], -1.0f, 1.0f) * 32767.0f);
+      input_frames_[j].l = static_cast<int16_t>(in[0][i + j] * 32768.0f);
+      input_frames_[j].r = static_cast<int16_t>(in[1][i + j] * 32768.0f);
     }
 
     // Pad remaining samples if block < 32

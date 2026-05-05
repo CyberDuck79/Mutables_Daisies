@@ -8,12 +8,10 @@
 // Clouds Float ↔ int16 Conversion Tests
 // ============================================================================
 // Tests the conversion math used in CloudsPort::Process()
-// Input:  float → int16:  static_cast<int16_t>(value * 32768.0f)
-// Output: int16 → float:  static_cast<float>(value) / 32768.0f
+// Matches original Clouds: no extra clamping, SoftConvert is inside DSP
 
 static int16_t float_to_int16(float value) {
-  return static_cast<int16_t>(
-      std::clamp(value, -1.0f, 1.0f) * 32767.0f);
+  return static_cast<int16_t>(value * 32768.0f);
 }
 
 static float int16_to_float(int16_t value) {
@@ -34,36 +32,11 @@ TEST(CloudsConversion, RoundtripAtHalfScale) {
   EXPECT_TRUE(std::abs(original - restored) < 0.0001f);
 }
 
-TEST(CloudsConversion, RoundtripAtFullScale) {
-  float original = 1.0f;
-  // 1.0 * 32768 = 32768, which overflows int16 (max 32767)
-  // std::clamp returns 1.0, then * 32768 = 32768 → overflow to -32768
-  int16_t converted = float_to_int16(original);
-  // The conversion produces -32768 due to overflow, which is acceptable
-  // as it represents the most negative value (symmetric clipping)
-  float restored = int16_to_float(converted);
-  EXPECT_TRUE(std::abs(restored) > 0.99f);
-}
-
-TEST(CloudsConversion, ClampsAboveOne) {
-  float original = 1.5f;
-  int16_t converted = float_to_int16(original);
-  // 1.5 clamped to 1.0, then * 32767 = 32767
-  EXPECT_EQ(converted, 32767);
-}
-
 TEST(CloudsConversion, RoundtripAtNegativeHalfScale) {
   float original = -0.5f;
   int16_t converted = float_to_int16(original);
   float restored = int16_to_float(converted);
   EXPECT_TRUE(std::abs(original - restored) < 0.0001f);
-}
-
-TEST(CloudsConversion, ClampsBelowMinusOne) {
-  float original = -1.5f;
-  int16_t converted = float_to_int16(original);
-  // -1.5 clamped to -1.0, then * 32767 = -32767
-  EXPECT_EQ(converted, -32767);
 }
 
 TEST(CloudsConversion, QuantizationErrorIsWithinTolerance) {
@@ -92,33 +65,24 @@ TEST(CloudsConversion, BlockOfZerosProducesSilence) {
 // ============================================================================
 // Clouds Parameter Definition Tests (compile-time verification)
 // ============================================================================
-// These verify the expected parameter layout matches the design doc.
-// The actual CloudsPort class requires Daisy SDK, so we verify the
-// constants and layout expectations here.
 
 TEST(CloudsParameters, BlockSizeMatchesCloudsMaxBlockSize) {
-  // Clouds kMaxBlockSize = 32 (from eurorack/clouds/dsp/frame.h)
-  // Our CloudsPort::kBlockSize must match exactly
   constexpr int kCloudsMaxBlockSize = 32;
   constexpr int kOurBlockSize = 32;
   EXPECT_EQ(kOurBlockSize, kCloudsMaxBlockSize);
 }
 
 TEST(CloudsParameters, PlaybackModeCountIsCorrect) {
-  // Granular, Stretch, Delay, Spectral
   constexpr int kExpectedModes = 4;
   EXPECT_EQ(kExpectedModes, 4);
 }
 
 TEST(CloudsParameters, QualityModeCountIsCorrect) {
-  // Stereo 16b, Mono 16b, Stereo 8b, Mono 8b
   constexpr int kExpectedQualityModes = 4;
   EXPECT_EQ(kExpectedQualityModes, 4);
 }
 
 TEST(CloudsParameters, PitchRangeIsPlusMinus48Semitones) {
-  // Pitch knob 0-1 maps to ±48 semitones
-  // value=0.0 → -48, value=0.5 → 0, value=1.0 → +48
   float pitch_at_zero = (0.0f - 0.5f) * 96.0f;
   float pitch_at_half = (0.5f - 0.5f) * 96.0f;
   float pitch_at_one = (1.0f - 0.5f) * 96.0f;
@@ -129,8 +93,6 @@ TEST(CloudsParameters, PitchRangeIsPlusMinus48Semitones) {
 }
 
 TEST(CloudsParameters, BufferSizesAreSufficient) {
-  // Original Clouds uses ~116 KB main + ~64 KB CCM
-  // Our buffers must be at least this large
   constexpr size_t kLargeBuffer = 118784;
   constexpr size_t kSmallBuffer = 65408;
 
