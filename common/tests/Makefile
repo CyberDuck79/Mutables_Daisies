@@ -12,7 +12,10 @@ SRCS = test_main.cpp \
        test_encoder_controller.cpp \
        test_application_context.cpp \
        test_midi_dispatcher.cpp \
-       test_display_queue.cpp
+       test_display_queue.cpp \
+       test_clouds_port.cpp
+
+CXXFLAGS = -std=c++17 -Wall -Wextra -I.. -I../.. -I../../eurorack -I../../clouds
 
 OBJS = $(SRCS:.cpp=.o)
 
