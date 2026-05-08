@@ -95,20 +95,23 @@ private:
   // 3: Pitch (±48 semitones)
   // 4: Density (0-1)
   // 5: Texture (0-1)
-  // 6-9: Mix submenu (Dry/Wet, Stereo Spread, Feedback, Reverb)
-  // 10: Freeze (ON/OFF)
-  // 11-13: Settings submenu (Quality, MIDI Ch, Calibrate)
-  // 14-15: Audio In L/R (CV input config)
-  // 16-17: CV Out 1/2 (optional)
-  // 18: Gate Out (optional)
-  // 19-20: Save/Load
+  // 6: Mix submenu (Dry/Wet, Stereo Spread, Feedback, Reverb)
+  // 7: Freeze (ON/OFF)
+  // 8: Settings submenu (Quality, MIDI Ch, Calibrate)
+  // 9: Audio In L (CV input config)
+  // 10: Audio In R (CV input config)
+  // 11: CV Out 1 (optional modulation output)
+  // 12: CV Out 2 (optional modulation output)
+  // 13: Gate Out (optional)
+  // 14: Save
+  // 15: Load
   //===========================================================================
-  static constexpr int kNumParams = 21;
+  static constexpr int kNumParams = 16;
   static constexpr int kNumMixParams = 4;
   static constexpr int kNumSettingsParams = 3;
-  static constexpr int kNumAudioInParams = 2;
-  static constexpr int kNumCVOutParams = 13;
-  static constexpr int kNumGateOutParams = 3;
+  static constexpr int kNumAudioInParams = 8;  // Matches audio_in template
+  static constexpr int kNumCVOutParams = 13;   // Matches cv_out template
+  static constexpr int kNumGateOutParams = 3;  // Matches gate_out template
 
   std::array<mutables_ui::Parameter, kNumParams> params_;
   std::array<mutables_ui::Parameter, kNumMixParams> mix_params_;

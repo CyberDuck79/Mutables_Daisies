@@ -199,6 +199,16 @@ struct Parameter {
     p.type = ParamType::SUB;
     p.children = children;
     p.child_count = count;
+#ifdef DEBUG_LOGGING
+    // Validate all children have non-empty names to catch uninitialized arrays
+    for (uint8_t i = 0; i < count; i++) {
+      if (children[i].name == nullptr || children[i].name[0] == '\0') {
+        // In debug builds, halt on uninitialized SUB children
+        while (1) {
+        } // Hard hang for debugger attachment
+      }
+    }
+#endif
     return p;
   }
 

@@ -1,5 +1,8 @@
 #include "clouds_port.h"
 #include "../common/constants.h"
+#include "../common/parameter_templates/audio_input_config.h"
+#include "../common/parameter_templates/cv_output_config.h"
+#include "../common/parameter_templates/gate_output_config.h"
 #include "../eurorack/clouds/dsp/granular_processor.h"
 #include "../eurorack/clouds/dsp/parameters.h"
 #include <cstring>
@@ -80,20 +83,22 @@ void CloudsPort::SetupParameters() {
   params_[8] = mutables_ui::Parameter::Sub(
       "Settings", settings_params_.data(), kNumSettingsParams);
 
-  // Audio In L/R (CV input config)
-  audio_in_params_[0][0] = mutables_ui::Parameter::CV("Audio In L");
+  // Audio In L/R (CV input config) - use template
+  mutables_ui::templates::audio_in::Setup(audio_in_params_[0]);
   params_[9] = mutables_ui::Parameter::Sub(
       "Audio In L", audio_in_params_[0].data(), kNumAudioInParams);
-  audio_in_params_[1][0] = mutables_ui::Parameter::CV("Audio In R");
+  mutables_ui::templates::audio_in::Setup(audio_in_params_[1]);
   params_[10] = mutables_ui::Parameter::Sub(
       "Audio In R", audio_in_params_[1].data(), kNumAudioInParams);
 
-  // CV Out 1/2 (optional modulation output)
-  // Placeholder - would use cv_out template like Plaits
+  // CV Out 1/2 (optional modulation output) - use template
+  mutables_ui::templates::cv_out::Setup(cv_out_params_[0]);
   params_[11] = mutables_ui::Parameter::Sub("CV Out 1", cv_out_params_[0].data(), kNumCVOutParams);
+  mutables_ui::templates::cv_out::Setup(cv_out_params_[1]);
   params_[12] = mutables_ui::Parameter::Sub("CV Out 2", cv_out_params_[1].data(), kNumCVOutParams);
 
-  // Gate Out (optional)
+  // Gate Out (optional) - use template
+  mutables_ui::templates::gate_out::Setup(gate_out_params_);
   params_[13] = mutables_ui::Parameter::Sub(
       "Gate Out", gate_out_params_.data(), kNumGateOutParams);
 
