@@ -239,7 +239,7 @@ int main(void) {
     clouds_module.Prepare();
 
     // Sync playback mode from UI parameter
-    int mode = clouds_module.GetParameters()[0].GetIndex();
+    int mode = clouds_module.GetParameters()[CloudsPort::MODE].GetIndex();
     if (mode != clouds_module.GetPlaybackMode()) {
       clouds_module.SetPlaybackMode(mode);
     }

@@ -26,6 +26,31 @@ public:
   ~CloudsPort() override;
 
   //===========================================================================
+  // Parameter indices — public for main loop access
+  //===========================================================================
+  enum ParamIndex : uint8_t {
+    MODE = 0,
+    POSITION,
+    SIZE,
+    PITCH,
+    DENSITY,
+    TEXTURE,
+    MIX,
+    FREEZE,
+    SETTINGS,
+    AUDIO_IN_L,
+    AUDIO_IN_R,
+    CV_OUT_1,
+    CV_OUT_2,
+    GATE_OUT,
+    SAVE,
+    LOAD,
+    PARAM_COUNT
+  };
+
+  static constexpr size_t kNumParams = PARAM_COUNT;
+
+  //===========================================================================
   // ModuleBase Interface
   //===========================================================================
   const char *GetName() const override { return "Clouds"; }
@@ -86,27 +111,8 @@ private:
   float sample_rate_;
 
   //===========================================================================
-  // Parameters
+  // Parameter sub-arrays
   //===========================================================================
-  // Layout follows clouds/README.md menu structure:
-  // 0: Playback Mode (ENUM)
-  // 1: Position (0-1)
-  // 2: Size (0-1)
-  // 3: Pitch (±48 semitones)
-  // 4: Density (0-1)
-  // 5: Texture (0-1)
-  // 6: Mix submenu (Dry/Wet, Stereo Spread, Feedback, Reverb)
-  // 7: Freeze (ON/OFF)
-  // 8: Settings submenu (Quality, MIDI Ch, Calibrate)
-  // 9: Audio In L (CV input config)
-  // 10: Audio In R (CV input config)
-  // 11: CV Out 1 (optional modulation output)
-  // 12: CV Out 2 (optional modulation output)
-  // 13: Gate Out (optional)
-  // 14: Save
-  // 15: Load
-  //===========================================================================
-  static constexpr int kNumParams = 16;
   static constexpr int kNumMixParams = 4;
   static constexpr int kNumSettingsParams = 3;
   static constexpr int kNumAudioInParams = 8;  // Matches audio_in template

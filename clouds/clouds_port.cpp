@@ -52,26 +52,26 @@ void CloudsPort::Init(float sample_rate) {
 
 void CloudsPort::SetupParameters() {
   // Playback Mode
-  params_[0] = mutables_ui::Parameter::Enum(
+  params_[MODE] = mutables_ui::Parameter::Enum(
       "Mode", playback_mode_names_, kNumPlaybackModes);
 
   // Core parameters
-  params_[1] = mutables_ui::Parameter::Knob("Position", 0.0f, 1.0f, 0.5f);
-  params_[2] = mutables_ui::Parameter::Knob("Size", 0.0f, 1.0f, 0.5f);
-  params_[3] = mutables_ui::Parameter::Knob("Pitch", 0.0f, 1.0f, 0.5f);
-  params_[4] = mutables_ui::Parameter::Knob("Density", 0.0f, 1.0f, 0.5f);
-  params_[5] = mutables_ui::Parameter::Knob("Texture", 0.0f, 1.0f, 0.5f);
+  params_[POSITION] = mutables_ui::Parameter::Knob("Position", 0.0f, 1.0f, 0.5f);
+  params_[SIZE] = mutables_ui::Parameter::Knob("Size", 0.0f, 1.0f, 0.5f);
+  params_[PITCH] = mutables_ui::Parameter::Knob("Pitch", 0.0f, 1.0f, 0.5f);
+  params_[DENSITY] = mutables_ui::Parameter::Knob("Density", 0.0f, 1.0f, 0.5f);
+  params_[TEXTURE] = mutables_ui::Parameter::Knob("Texture", 0.0f, 1.0f, 0.5f);
 
   // Mix submenu
   mix_params_[0] = mutables_ui::Parameter::Knob("Dry/Wet", 0.0f, 1.0f, 0.5f);
   mix_params_[1] = mutables_ui::Parameter::Knob("Stereo Spread", 0.0f, 1.0f, 0.5f);
   mix_params_[2] = mutables_ui::Parameter::Knob("Feedback", 0.0f, 1.0f, 0.5f);
   mix_params_[3] = mutables_ui::Parameter::Knob("Reverb", 0.0f, 1.0f, 0.5f);
-  params_[6] = mutables_ui::Parameter::Sub("Mix", mix_params_.data(), kNumMixParams);
+  params_[MIX] = mutables_ui::Parameter::Sub("Mix", mix_params_.data(), kNumMixParams);
 
   // Freeze
   static const char *freeze_labels_[] = {"OFF", "ON"};
-  params_[7] = mutables_ui::Parameter::Enum("Freeze", freeze_labels_, 2);
+  params_[FREEZE] = mutables_ui::Parameter::Enum("Freeze", freeze_labels_, 2);
 
   // Settings submenu
   settings_params_[0] = mutables_ui::Parameter::Enum(
@@ -80,31 +80,34 @@ void CloudsPort::SetupParameters() {
       "MIDI Ch", midi_channel_names_, kNumMidiChannels);
   settings_params_[1].SetIndex(0); // Omni
   settings_params_[2] = mutables_ui::Parameter::Calibration();
-  params_[8] = mutables_ui::Parameter::Sub(
+  params_[SETTINGS] = mutables_ui::Parameter::Sub(
       "Settings", settings_params_.data(), kNumSettingsParams);
 
   // Audio In L/R (CV input config) - use template
   mutables_ui::templates::audio_in::Setup(audio_in_params_[0]);
-  params_[9] = mutables_ui::Parameter::Sub(
+  params_[AUDIO_IN_L] = mutables_ui::Parameter::Sub(
       "Audio In L", audio_in_params_[0].data(), kNumAudioInParams);
   mutables_ui::templates::audio_in::Setup(audio_in_params_[1]);
-  params_[10] = mutables_ui::Parameter::Sub(
+  params_[AUDIO_IN_R] = mutables_ui::Parameter::Sub(
       "Audio In R", audio_in_params_[1].data(), kNumAudioInParams);
 
   // CV Out 1/2 (optional modulation output) - use template
   mutables_ui::templates::cv_out::Setup(cv_out_params_[0]);
-  params_[11] = mutables_ui::Parameter::Sub("CV Out 1", cv_out_params_[0].data(), kNumCVOutParams);
+  params_[CV_OUT_1] = mutables_ui::Parameter::Sub("CV Out 1", cv_out_params_[0].data(), kNumCVOutParams);
   mutables_ui::templates::cv_out::Setup(cv_out_params_[1]);
-  params_[12] = mutables_ui::Parameter::Sub("CV Out 2", cv_out_params_[1].data(), kNumCVOutParams);
+  params_[CV_OUT_2] = mutables_ui::Parameter::Sub("CV Out 2", cv_out_params_[1].data(), kNumCVOutParams);
 
   // Gate Out (optional) - use template
   mutables_ui::templates::gate_out::Setup(gate_out_params_);
-  params_[13] = mutables_ui::Parameter::Sub(
+  params_[GATE_OUT] = mutables_ui::Parameter::Sub(
       "Gate Out", gate_out_params_.data(), kNumGateOutParams);
 
   // Save/Load
-  params_[14] = mutables_ui::Parameter::Save();
-  params_[15] = mutables_ui::Parameter::Load();
+  params_[SAVE] = mutables_ui::Parameter::Save();
+  params_[LOAD] = mutables_ui::Parameter::Load();
+
+  // Compile-time validation: ensure all enum indices are within array bounds
+  static_assert(PARAM_COUNT <= params_.size(), "PARAM_COUNT exceeds array size");
 }
 
 void CloudsPort::UpdateParametersToDSP() {
@@ -112,16 +115,16 @@ void CloudsPort::UpdateParametersToDSP() {
 
   clouds::Parameters *p = processor_->mutable_parameters();
 
-  p->position = params_[1].value;
-  p->size = params_[2].value;
-  p->pitch = (params_[3].value - 0.5f) * 96.0f;  // ±48 semitones
-  p->density = params_[4].value;
-  p->texture = params_[5].value;
+  p->position = params_[POSITION].value;
+  p->size = params_[SIZE].value;
+  p->pitch = (params_[PITCH].value - 0.5f) * 96.0f;  // ±48 semitones
+  p->density = params_[DENSITY].value;
+  p->texture = params_[TEXTURE].value;
   p->dry_wet = mix_params_[0].value;
   p->stereo_spread = mix_params_[1].value;
   p->feedback = mix_params_[2].value;
   p->reverb = mix_params_[3].value;
-  p->freeze = params_[7].GetIndex() == 1 || freeze_state_;
+  p->freeze = params_[FREEZE].GetIndex() == 1 || freeze_state_;
   p->trigger = trigger_state_;
 }
 
