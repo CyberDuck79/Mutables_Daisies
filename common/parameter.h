@@ -116,7 +116,7 @@ struct Parameter {
   MappingConfig mapping;
 
   // For ENUM type
-  const char **enum_labels;
+  const char *const *enum_labels;
   uint8_t enum_count;
 
   // For SUB type
@@ -167,8 +167,8 @@ struct Parameter {
     return p;
   }
 
-  // ENUM constructor
-  static Parameter Enum(const char *name, const char **labels, uint8_t count,
+  // ENUM constructor (runtime count — legacy)
+  static Parameter Enum(const char *name, const char *const *labels, uint8_t count,
                         uint8_t default_index = 0) {
     Parameter p;
     p.name = name;
@@ -179,6 +179,15 @@ struct Parameter {
     p.enum_labels = labels;
     p.enum_count = count;
     return p;
+  }
+
+  // ENUM constructor (compile-time count deduced from array size)
+  // Usage: Parameter::Enum("Mode", my_array) — count is automatic
+  template <size_t N>
+  static Parameter Enum(const char *name, const char *const (&labels)[N],
+                        uint8_t default_index = 0) {
+    static_assert(N > 0, "Enum must have at least one label");
+    return Enum(name, labels, static_cast<uint8_t>(N), default_index);
   }
 
   // MIDI channel constructor
@@ -291,8 +300,14 @@ struct Parameter {
     return false;
   }
 
-  // Get integer index for ENUM/MIDI params
-  int GetIndex() const { return static_cast<int>(value + 0.5f); }
+  // Get integer index for ENUM/MIDI params (bounds-checked for ENUM)
+  int GetIndex() const {
+    int idx = static_cast<int>(value + 0.5f);
+    if (type == ParamType::ENUM) {
+      idx = std::clamp(idx, 0, static_cast<int>(enum_count) - 1);
+    }
+    return idx;
+  }
 
   // Set index for ENUM/MIDI params
   void SetIndex(int index) {

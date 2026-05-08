@@ -235,6 +235,10 @@ int main(void) {
     hw.ProcessAllControls();
     UpdateEncoder();
 
+    // Read gate inputs (Freeze on Gate 1, Trigger on Gate 2)
+    clouds_module.ProcessGate(0, hw.gate_input[0].State());
+    clouds_module.ProcessGate(1, hw.gate_input[1].State());
+
     // Prepare() called every main loop iteration (matches original firmware)
     clouds_module.Prepare();
 

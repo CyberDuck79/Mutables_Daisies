@@ -126,17 +126,24 @@ private:
   std::array<mutables_ui::Parameter, kNumCVOutParams> cv_out_params_[2];
   std::array<mutables_ui::Parameter, kNumGateOutParams> gate_out_params_;
 
-  // Playback mode names
-  static const char *playback_mode_names_[];
-  static constexpr int kNumPlaybackModes = 4;
+  // Playback mode names (constexpr array — count deduced at compile time)
+  static constexpr const char *playback_mode_names_[] = {
+      "Granular", "Stretch", "Delay", "Spectral"};
+  static constexpr size_t kNumPlaybackModes =
+      sizeof(playback_mode_names_) / sizeof(playback_mode_names_[0]);
 
   // Quality mode names
-  static const char *quality_names_[];
-  static constexpr int kNumQualityModes = 4;
+  static constexpr const char *quality_names_[] = {
+      "Stereo 16b", "Mono 16b", "Stereo 8b", "Mono 8b"};
+  static constexpr size_t kNumQualityModes =
+      sizeof(quality_names_) / sizeof(quality_names_[0]);
 
   // MIDI channel names
-  static const char *midi_channel_names_[];
-  static constexpr int kNumMidiChannels = 17;
+  static constexpr const char *midi_channel_names_[] = {
+      "Omni", "1",  "2",  "3",  "4",  "5",  "6",  "7",  "8",
+      "9",    "10", "11", "12", "13", "14", "15", "16"};
+  static constexpr size_t kNumMidiChannels =
+      sizeof(midi_channel_names_) / sizeof(midi_channel_names_[0]);
 
   void SetupParameters();
   void UpdateParametersToDSP();

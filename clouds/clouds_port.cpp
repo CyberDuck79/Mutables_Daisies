@@ -11,12 +11,6 @@ namespace mutables_clouds {
 
 using namespace mutables;
 
-const char *CloudsPort::playback_mode_names_[] = {"Granular", "Stretch", "Delay", "Spectral"};
-const char *CloudsPort::quality_names_[] = {"Stereo 16b", "Mono 16b", "Stereo 8b", "Mono 8b"};
-const char *CloudsPort::midi_channel_names_[] = {
-    "Omni", "1",  "2",  "3",  "4",  "5",  "6",  "7",  "8",
-    "9",    "10", "11", "12", "13", "14", "15", "16"};
-
 CloudsPort::CloudsPort()
     : processor_(nullptr),
       freeze_state_(false),
@@ -51,9 +45,8 @@ void CloudsPort::Init(float sample_rate) {
 }
 
 void CloudsPort::SetupParameters() {
-  // Playback Mode
-  params_[MODE] = mutables_ui::Parameter::Enum(
-      "Mode", playback_mode_names_, kNumPlaybackModes);
+  // Playback Mode — count deduced from array size at compile time
+  params_[MODE] = mutables_ui::Parameter::Enum("Mode", playback_mode_names_);
 
   // Core parameters
   params_[POSITION] = mutables_ui::Parameter::Knob("Position", 0.0f, 1.0f, 0.5f);
@@ -69,19 +62,17 @@ void CloudsPort::SetupParameters() {
   mix_params_[3] = mutables_ui::Parameter::Knob("Reverb", 0.0f, 1.0f, 0.5f);
   params_[MIX] = mutables_ui::Parameter::Sub("Mix", mix_params_.data(), kNumMixParams);
 
-  // Freeze
+  // Freeze — count deduced from array size
   static const char *freeze_labels_[] = {"OFF", "ON"};
-  params_[FREEZE] = mutables_ui::Parameter::Enum("Freeze", freeze_labels_, 2);
+  params_[FREEZE] = mutables_ui::Parameter::Enum("Freeze", freeze_labels_);
 
-  // Settings submenu
-  settings_params_[0] = mutables_ui::Parameter::Enum(
-      "Quality", quality_names_, kNumQualityModes);
-  settings_params_[1] = mutables_ui::Parameter::Enum(
-      "MIDI Ch", midi_channel_names_, kNumMidiChannels);
-  settings_params_[1].SetIndex(0); // Omni
-  settings_params_[2] = mutables_ui::Parameter::Calibration();
+  // Settings submenu — counts deduced from array sizes
   params_[SETTINGS] = mutables_ui::Parameter::Sub(
       "Settings", settings_params_.data(), kNumSettingsParams);
+  settings_params_[0] = mutables_ui::Parameter::Enum("Quality", quality_names_);
+  settings_params_[1] = mutables_ui::Parameter::Enum("MIDI Ch", midi_channel_names_);
+  settings_params_[1].SetIndex(0); // Omni
+  settings_params_[2] = mutables_ui::Parameter::Calibration();
 
   // Audio In L/R (CV input config) - use template
   mutables_ui::templates::audio_in::Setup(audio_in_params_[0]);
@@ -181,6 +172,8 @@ void CloudsPort::Prepare() {
 
 void CloudsPort::SetPlaybackMode(int mode) {
   if (!processor_) return;
+  // Bounds check: prevent invalid enum values that cause DSP silence
+  if (mode < 0 || mode >= static_cast<int>(kNumPlaybackModes)) return;
   processor_->set_playback_mode(
       static_cast<clouds::PlaybackMode>(mode));
 }
