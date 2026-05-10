@@ -88,6 +88,10 @@ public:
         for (int i = 0; i < MenuState::VISIBLE_PARAMS && 
                     (menu.scroll_offset + i) < menu.param_count; i++) {
             int param_idx = menu.scroll_offset + i;
+            // Skip parameters with empty names (uninitialized slots)
+            if (params[param_idx].name == nullptr || params[param_idx].name[0] == '\0') {
+                continue;
+            }
             RenderParameter(params[param_idx], 
                           line, 
                           param_idx == menu.selected_param,
@@ -125,6 +129,11 @@ public:
         
         for (int param_idx = 0; param_idx < parent->child_count && line < kScreenHeight; param_idx++) {
             Parameter& param = parent->children[param_idx];
+            
+            // Skip parameters with empty names (uninitialized slots)
+            if (param.name == nullptr || param.name[0] == '\0') {
+                continue;
+            }
             
             if (!param.IsVisible(parent->children, parent->child_count, param_idx)) {
                 continue;
